@@ -6,7 +6,7 @@ from flask import abort
 from flask import session
 from functools import wraps
 
-USER_KEY = "user_uid"
+USER_KEY = "USER"
 
 
 def login(user):

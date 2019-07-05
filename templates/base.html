@@ -10,9 +10,9 @@
     <h1>Welcome to Recaster</h1>
     <a>
         {% if user %}
-            Not {{ user.name }}? <a>Logout</a>
+            Not {{ user.name }}? <a href="{{ url_for('logout') }}">Logout</a>
         {% else %}
-            <a href="{{ url_for() }}">Login</a>
+            <a href="{{ url_for('home') }}">Login</a>
         {% endif %}
     </div>
 

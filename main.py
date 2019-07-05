@@ -1,13 +1,16 @@
 import firebase_admin.auth
+import settings # required to be in the same folder
 
 from flask import Flask
 from flask import make_response
 from flask import render_template
 from flask import request
+from flask import session
 
 from apps.auth.utils import required_authenticated
 
 app = Flask(__name__)
+app.secret_key = bytes(settings.SECRET_KEY, "utf-8")
 firebase_app = firebase_admin.initialize_app()
 
 
@@ -21,9 +24,20 @@ def authenticate():
     token = request.form["token"]
     decoded_token = firebase_admin.auth.verify_id_token(token)
     user_uid = decoded_token['uid']
-    user = f(user_uid)
-    login(user)
-    return uid
+
+
+    ## TEMPORARY
+    session["USER"] = user_uid
+    print("TEST TEST TEST")
+    ## END TEMP
+    #user = f(user_uid)
+    #login(user)
+    return user_uid
+
+
+@app.route('/logout/')
+def logout():
+    pass
 
 
 @app.route('/podcast/')
