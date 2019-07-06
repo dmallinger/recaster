@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <a href="{{ url_for("podcasts_edit") }}">Click here</a> to edit your podcasts.
+
+    {% for podcast in podcasts %}
+        {{ podcast.name }}
+    {% endfor %}
+{% endblock %}
+

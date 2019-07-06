@@ -1,17 +1,76 @@
+import yaml
+
 import firebase_admin.auth
-import settings # required to be in the same folder
+from firebase_admin import firestore
 
 from flask import Flask
-from flask import make_response
 from flask import render_template
 from flask import request
 from flask import session
 
+from apps.auth.utils import get_authenticated_user
+from apps.auth.utils import session_login
 from apps.auth.utils import required_authenticated
+import settings
+
 
 app = Flask(__name__)
 app.secret_key = bytes(settings.SECRET_KEY, "utf-8")
 firebase_app = firebase_admin.initialize_app()
+db = firestore.client()
+
+
+"""
+
+{
+    name:
+    links: [{url: ...}, {...}, ...]
+}
+
+
+
+
+
+
+
+user_podcast
+    id
+    parser
+    user_id
+    name
+    description
+    url
+    listing  # the rss feed in custom objects
+
+
+user_metacast
+    id
+    user_id
+    name
+    description
+    podcast_ids
+    
+
+podcast.yaml
+
+- podcast:
+    name: Cumtown
+    description: Terrible Podcast
+    link:
+        - url: www.google.com
+          parser: google
+        - url: www.yahoo.com
+          parser: microsoft
+
+
+- podcast:
+    name: Test 2
+    description: Second Test
+    link:
+        - url: www.fake.com
+          parser: rss
+
+"""
 
 
 @app.route('/')
@@ -21,17 +80,15 @@ def home():
 
 @app.route('/authenticate/', methods=["POST"])
 def authenticate():
+    """Called by the browser after the return status from FirebaseUI login
+
+    :return: The user_id (to be received by the browser).
+    """
     token = request.form["token"]
     decoded_token = firebase_admin.auth.verify_id_token(token)
     user_uid = decoded_token['uid']
-
-
-    ## TEMPORARY
-    session["USER"] = user_uid
-    print("TEST TEST TEST")
-    ## END TEMP
-    #user = f(user_uid)
-    #login(user)
+    user = firebase_admin.auth.get_user(user_uid)
+    session_login(user)
     return user_uid
 
 
@@ -40,30 +97,77 @@ def logout():
     pass
 
 
-@app.route('/podcast/')
+@app.route('/podcast/<podcast_id>/')
+def podcast(podcast_id):
+    """Render RSS for specified podcast
+
+    :param podcast_id: Podcast to render
+    :return: RSS feed
+    """
+    pass
+
+USERS_COLLECTION = "users"
+USER_PODCAST_COLLECTION = "users-podcasts"
+PODCAST_COLLECTION = "podcasts"
+
+@app.route('/podcasts/')
 @required_authenticated
-def podcast_add():
-    return "Hello world, I'm {}".format(podcast_id)
+def podcasts_list():
+    podcast_yaml = """
+- podcast:
+    name: Cumtown
+    description: Terrible Podcast
+    link:
+        - url: www.google.com
+          parser: google
+        - url: www.yahoo.com
+          parser: microsoft
 
 
-@app.route('/podcast/<podcast_id>')
+- podcast:
+    name: Test 2
+    description: Second Test
+    link:
+        - url: www.fake.com
+          parser: rss
+    """
+
+    from apps.podcast import podcast
+    x = podcast.PodcastYamlParser(podcast_yaml)
+    return str(x.podcasts)
+
+    user = get_authenticated_user()
+    podcasts = db.collection(USER_PODCAST_COLLECTION).document(user.uid).collection(PODCAST_COLLECTION).get()
+    print("Podcasts: {}".format(podcasts))
+    return render_template("podcasts.html", podcasts=podcasts)
+
+
+MAX_YAML_LENGTH = 5000
+
+@app.route('/edit-podcasts/', methods=["GET", "POST"])
 @required_authenticated
-def podcast_edit(podcast_id):
-    return "Hello world, I'm {}".format(podcast_id)
+def podcasts_edit():
+    user = get_authenticated_user()
+
+    if request.method == 'POST':
+        # for half-butted security, we cast the yaml to ASCII and give it a max length
+        # before arbitrarily passing it to the parser.
+        content = request.form["yaml"].encode("ascii", "ignore")[:MAX_YAML_LENGTH]
+        try:
+            podcasts = yaml.load(content)
+            return "YAY!"
+        except Exception:
+            return render_template("podcasts_edit.html", podcast_yaml=content, yaml_error=True)
+    else:
+        podcasts = db.collection(USER_PODCAST_COLLECTION).document(user.uid).collection(PODCAST_COLLECTION).get()
+        content = str(podcasts)
+        return render_template("podcasts_edit.html", podcast_yaml=content)
 
 
-@app.route('/podcasts/<user_id>')
-def podcast_list(user_id):
-    dummy_times = [cookie for cookie in request.cookies]
-    text = str(dir(request))
-    html = render_template('login.html', times=dummy_times, text=text)
-    response = make_response(html)
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-
-    return str(dir(firebase_admin.auth))
-
+@app.after_request
+def add_header(response):
+    response.cache_control.max_age = 300
+    response.cache_control.public = True
     return response
 
 
