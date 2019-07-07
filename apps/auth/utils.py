@@ -14,6 +14,10 @@ def session_login(user):
     session.permanent = True  # keep session after browser closer
 
 
+def session_logout():
+    del session[USER_KEY]
+
+
 def is_authenticated():
     return USER_KEY in session
 

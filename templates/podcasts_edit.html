@@ -7,7 +7,7 @@
         {% if yaml_error %}Sorry, but your YAML was incorrectly formatted.  Please confirm in an online parser before submitting.
         {% endif %}
 
-        <textarea name="yaml">{{ podcast_yaml }}</textarea>
+        <textarea name="yaml" rows="20" cols="50">{{ podcast_yaml }}</textarea>
 
         <button onclick="javascript: window.history.go(-1); return false;">Cancel</button>
         <input type="submit" value="Update" />

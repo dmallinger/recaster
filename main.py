@@ -5,11 +5,13 @@ from firebase_admin import firestore
 
 from flask import Flask
 from flask import render_template
+from flask import redirect
 from flask import request
 from flask import session
+from flask import url_for
 
-from apps.auth.utils import get_authenticated_user
-from apps.auth.utils import session_login
+from apps.auth.utils import is_authenticated, get_authenticated_user
+from apps.auth.utils import session_login, session_logout
 from apps.auth.utils import required_authenticated
 import settings
 
@@ -20,61 +22,13 @@ firebase_app = firebase_admin.initialize_app()
 db = firestore.client()
 
 
-"""
-
-{
-    name:
-    links: [{url: ...}, {...}, ...]
-}
-
-
-
-
-
-
-
-user_podcast
-    id
-    parser
-    user_id
-    name
-    description
-    url
-    listing  # the rss feed in custom objects
-
-
-user_metacast
-    id
-    user_id
-    name
-    description
-    podcast_ids
-    
-
-podcast.yaml
-
-- podcast:
-    name: Cumtown
-    description: Terrible Podcast
-    link:
-        - url: www.google.com
-          parser: google
-        - url: www.yahoo.com
-          parser: microsoft
-
-
-- podcast:
-    name: Test 2
-    description: Second Test
-    link:
-        - url: www.fake.com
-          parser: rss
-
-"""
-
-
 @app.route('/')
 def home():
+    return render_template("home.html")
+
+
+@app.route('/login/')
+def login():
     return render_template("login.html")
 
 
@@ -94,7 +48,8 @@ def authenticate():
 
 @app.route('/logout/')
 def logout():
-    pass
+    session_logout()
+    return redirect(url_for("home"))
 
 
 @app.route('/podcast/<podcast_id>/')
@@ -106,62 +61,52 @@ def podcast(podcast_id):
     """
     pass
 
-USERS_COLLECTION = "users"
-USER_PODCAST_COLLECTION = "users-podcasts"
-PODCAST_COLLECTION = "podcasts"
 
 @app.route('/podcasts/')
 @required_authenticated
 def podcasts_list():
-    podcast_yaml = """
-- podcast:
-    name: Cumtown
-    description: Terrible Podcast
-    link:
-        - url: www.google.com
-          parser: google
-        - url: www.yahoo.com
-          parser: microsoft
-
-
-- podcast:
-    name: Test 2
-    description: Second Test
-    link:
-        - url: www.fake.com
-          parser: rss
-    """
-
-    from apps.podcast import podcast
-    x = podcast.PodcastYamlParser(podcast_yaml)
-    return str(x.podcasts)
+    from apps.podcast.podcast import Podcast
 
     user = get_authenticated_user()
-    podcasts = db.collection(USER_PODCAST_COLLECTION).document(user.uid).collection(PODCAST_COLLECTION).get()
-    print("Podcasts: {}".format(podcasts))
-    return render_template("podcasts.html", podcasts=podcasts)
+    content = Podcast.get_user_podcasts_yaml(user.uid)
 
+    return "***{}***".format(content)
 
-MAX_YAML_LENGTH = 5000
 
 @app.route('/edit-podcasts/', methods=["GET", "POST"])
 @required_authenticated
 def podcasts_edit():
+
+    from apps.podcast.podcast import Podcast
+    import traceback
+
     user = get_authenticated_user()
 
+
+    print(dir(user))
+
     if request.method == 'POST':
-        # for half-butted security, we cast the yaml to ASCII and give it a max length
-        # before arbitrarily passing it to the parser.
-        content = request.form["yaml"].encode("ascii", "ignore")[:MAX_YAML_LENGTH]
+        content = request.form["yaml"]
         try:
-            podcasts = yaml.load(content)
-            return "YAY!"
-        except Exception:
-            return render_template("podcasts_edit.html", podcast_yaml=content, yaml_error=True)
+            podcasts = Podcast.parse_user_podcasts_yaml(content)
+            Podcast.save_user_podcasts(user.uid, podcasts)
+            return redirect(url_for("podcasts_list"))
+        except Exception as e:
+            tb = traceback.format_exc()
+            return render_template("podcasts_edit.html", podcast_yaml=tb, yaml_error=True)
     else:
-        podcasts = db.collection(USER_PODCAST_COLLECTION).document(user.uid).collection(PODCAST_COLLECTION).get()
-        content = str(podcasts)
+        content = Podcast.get_user_podcasts_yaml(user.uid)
         return render_template("podcasts_edit.html", podcast_yaml=content)
+
+
+@app.context_processor
+def inject_dict_for_all_templates():
+    global_vars = {}
+
+    if is_authenticated():
+        global_vars["user"] = get_authenticated_user()
+
+    return global_vars
 
 
 @app.after_request

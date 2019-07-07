@@ -1,1 +1,2 @@
-SECRET_KEY="This is a secret."
+SECRET_KEY = "This is a secret."
+ALLOW_ANONYMOUS_USERS = False
