@@ -13,6 +13,7 @@ from flask import url_for
 from apps.auth.utils import is_authenticated, get_authenticated_user
 from apps.auth.utils import session_login, session_logout
 from apps.auth.utils import required_authenticated
+from apps.podcast import Podcast
 import settings
 
 
@@ -65,12 +66,10 @@ def podcast(podcast_id):
 @app.route('/podcasts/')
 @required_authenticated
 def podcasts_list():
-    from apps.podcast.podcast import Podcast
-
     user = get_authenticated_user()
-    content = Podcast.get_user_podcasts_yaml(user.uid)
+    podcasts = Podcast.get_user_podcasts(user.uid)
 
-    return "***{}***".format(content)
+    return render_template("podcasts.html", podcasts=podcasts)
 
 
 @app.route('/edit-podcasts/', methods=["GET", "POST"])
@@ -111,8 +110,10 @@ def inject_dict_for_all_templates():
 
 @app.after_request
 def add_header(response):
-    response.cache_control.max_age = 300
     response.cache_control.public = True
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return response
 
 

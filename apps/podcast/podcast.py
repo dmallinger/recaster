@@ -197,7 +197,7 @@ class Podcast:
         if 0 == len(podcast_pojos):  # since we start with an empty list
             return ""
         else:
-            return yaml.dump(podcast_pojos)
+            return yaml.dump(podcast_pojos, sort_keys=False)
 
     @staticmethod
     def from_dict(dict_):

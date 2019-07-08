@@ -8,7 +8,7 @@
         html,body{margin:0;padding:0}
         body{font: 90% arial,sans-serif;text-align:left; padding-left: 2em; padding-right: 2em;}
         p{margin:0 10px 10px}
-        a{padding:5px; text-decoration:none; color:#000000;}
+        a{padding:5px; text-decoration:none; color:blue;}
         div#header{background-color:#F3F2ED;}
         div#header h1{height:80px;line-height:80px;margin:0;padding-left:10px;}
         div#container{text-align:left}
@@ -23,16 +23,22 @@
         div#wrapper{float:left;width:100%}
         div#content{margin-right: 300px}
         div#navigation{float:left;width:150px;margin-left:-150px}
-        div#extra{float:left;width:150px;margin-left:-300px}
+        div#extra{float:left;width:150px;margin-left:-300px; background-color: red;}
         div#footer{clear:left;width:100%}
+        h1{0.8em;}
+        .error-msg {color: red; font-weight: bold;}
+        .left-column {float: left; width: 60%;}
+        .right-column {float: left; width: 39%;}
+        /* Clear floats after the columns */
+        .row:after {content: ""; display: table; clear: both;}
     </style>
 
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
     {% block header %}{% endblock %}
   </head>
   <body>
-    <h1>Welcome to Recaster</h1>
     <div id="header">
+        <h1>Welcome to Recaster</h1>
         {% if user %}
             <a href="{{ url_for('home') }}">Home</a> <strong>||</strong>
             <a href="{{ url_for('podcasts_list') }}">View Podcasts</a> <strong>||</strong>

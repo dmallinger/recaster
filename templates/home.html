@@ -2,4 +2,8 @@
 
 {% block content %}
     This is the home page!
+
+    {% if not user %}
+        To submit an anonymous podcast, enter the details below:
+    {% endif %}
 {% endblock %}
