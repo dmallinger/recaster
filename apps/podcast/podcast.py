@@ -31,6 +31,7 @@ episode (unique by (podcast, parser)
 
 """
 
+ANONYMOUS_USER_ID = None
 USER_PODCAST_COLLECTION = "users-podcasts"
 PODCAST_COLLECTION = "podcasts"
 
@@ -108,7 +109,6 @@ class Podcast:
     @classmethod
     def get_user_podcasts_reference(cls, user_uid):
         db = firestore.client()
-
         return db.collection(USER_PODCAST_COLLECTION) \
                  .document(user_uid) \
                  .collection(PODCAST_COLLECTION)
@@ -120,7 +120,7 @@ class Podcast:
 
     @classmethod
     def get_user_podcasts(cls, user_uid):
-        return [Podcast.from_dict(o.to_dict()) for o in cls.get_user_podcasts_documents(user_uid)]
+        return (Podcast.from_dict(o.to_dict()) for o in cls.get_user_podcasts_documents(user_uid))
 
     @classmethod
     def save_user_podcasts(cls, user_uid, new_podcasts):

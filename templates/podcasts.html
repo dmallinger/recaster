@@ -3,8 +3,7 @@
 {% block content %}
     <ul>
         {% for podcast in podcasts %}
-            <li>{{ podcast.name }}</li>
-            <li>
+            <li>{{ podcast.name }}
                 <ul>
                     {% for link in podcast.links %}
                         <li>{{ link.url }} ({{ link.parser }})</li>

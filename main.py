@@ -3,24 +3,51 @@ import yaml
 import firebase_admin.auth
 from firebase_admin import firestore
 
+from flask import abort
 from flask import Flask
 from flask import render_template
 from flask import redirect
 from flask import request
 from flask import session
 from flask import url_for
+from functools import wraps
 
 from apps.auth.utils import is_authenticated, get_authenticated_user
 from apps.auth.utils import session_login, session_logout
 from apps.auth.utils import required_authenticated
 from apps.podcast import Podcast
+from apps.tasks import add_task
 import settings
 
+OK_RESPONSE = "Ok"
 
 app = Flask(__name__)
 app.secret_key = bytes(settings.SECRET_KEY, "utf-8")
 firebase_app = firebase_admin.initialize_app()
 db = firestore.client()
+
+
+def require_cron_job(function):
+    """DECORATOR"""
+    @wraps(function)
+    def decorated_function(*args, **kwargs):
+        if request.headers.get("X-Appengine-Cron") == "true":
+            return function(*args, **kwargs)
+        else:
+            abort(401)
+
+    return decorated_function
+
+
+def require_task_api_key(function):
+    """DECORATOR"""
+    @wraps(function)
+    def decorated_function(*args, **kwargs):
+        if request.args.get("TASK_API_KEY") == settings.TASK_API_KEY:
+            return function(*args, **kwargs)
+        else:
+            abort(401)
+    return decorated_function
 
 
 @app.route('/')
@@ -96,6 +123,42 @@ def podcasts_edit():
     else:
         content = Podcast.get_user_podcasts_yaml(user.uid)
         return render_template("podcasts_edit.html", podcast_yaml=content)
+
+
+@app.route('/internal/start-parsing', methods=["GET", "POST"])
+@require_cron_job
+def task_start_parsing():
+    add_task(url_for("task_queue_users"))
+    return OK_RESPONSE
+
+
+@app.route('/internal/queue-users', methods=["GET", "POST"])
+@require_task_api_key
+def task_queue_users():
+    users = firebase_admin.auth.list_users().iterate_all()
+    for user in users:
+        if user.disabled:  # skip disabled users
+            continue
+        # add user task
+        add_task(url_for("task_queue_podcasts"), {"user_uid": user.uid})
+
+    return OK_RESPONSE
+
+
+@app.route('/internal/queue-podcasts', methods=["GET", "POST"])
+@require_task_api_key
+def task_queue_podcasts():
+    user_uid
+    podcasts = Podcast.get_user_podcasts(user_uid)
+    for podcast in podcasts:
+        add_task(url_for("task_parse_podcast"), {"podcast_uid": podcast.uid})
+    return OK_RESPONSE
+
+
+@app.route('/internal/parse-podcast', methods=["GET", "POST"])
+@require_task_api_key
+def task_parse_podcast():
+    pass
 
 
 @app.context_processor

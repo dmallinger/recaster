@@ -1,2 +1,18 @@
-SECRET_KEY = "This is a secret."
-ALLOW_ANONYMOUS_USERS = False
+# Google app engine project name
+PROJECT = "my-project"
+
+# for Flask- required for sessions
+SECRET_KEY = ""
+
+# Should someone be able to make a new podcast without logging in?
+ALLOW_ANONYMOUS_USERS = True
+
+# Information about the Cloud Task queue we use for parsing feeds
+PODCAST_PARSING_QUEUE_NAME = ""
+PODCAST_PARSING_QUEUE_LOCATION = "us-east"
+
+# NOT from Google
+# Used to ensure that Task URLs aren't started by robots or others on the web.
+# A hack around the need for IAM and other more complex credentials in the
+# Python 3 App Engine environment.
+TASK_API_KEY = ""
