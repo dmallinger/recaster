@@ -1,19 +1,37 @@
+import feedparser
 
 
 class Parser:
-    _NAME = "AbstractParser"
+    @classmethod
+    def get_parser(cls, name):
+        return PARSER[name]
 
-    def get_name(self):
-        return self._NAME
+    def parse_podcast(self, podcast):
+        all_entries = []
+        for link in podcast.links:
+            parser = feedparser
+            feed = parser.parse(link.url)
+            all_entries.extend(feed["entries"])
+        sorted_entries = sorted(all_entries, key=lambda entry: entry["published_parsed"], reverse=True)
+        return {
+                "name": podcast.name,
+                "description": podcast.description,
+                "entries": sorted_entries
+            }
+
+    def parse_rss(self, url):
+        return feedparser.parse(url)
 
     def parse(self, url):
-        pass
+        raise NotImplementedError("Parser.parse is an abstract method")
 
 
 class RssParser(Parser):
-    def __init__(self):
-        pass
-
     def parse(self, url):
-        pass
+        return self.parse_rss(url)
+
+
+PARSER = {
+    "rss": RssParser
+}
 

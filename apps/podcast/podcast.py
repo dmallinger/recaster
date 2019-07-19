@@ -48,7 +48,7 @@ class PodcastParserFormatException(Exception):
 
 
 class Podcast:
-    def __init__(self, name, description, url=None, parser=None, links=None):
+    def __init__(self, name, description, url=None, parser=None, links=None, id=None):
         """
 
         :param name:
@@ -62,6 +62,7 @@ class Podcast:
         if links is not None and url is not None:
             raise Exception("Cannot provide both links and url to Podcast.")
 
+        self.id = id
         self.name = name
         self.description = description
 
@@ -101,7 +102,8 @@ class Podcast:
         return [(link.url, link.parser) for link in self.links]
 
     def to_dict(self):
-        pojo = {"name": self.name,
+        pojo = {"id": self.id,
+                "name": self.name,
                 "description": self.description,
                 "links": [link.to_dict() for link in self.links]}
         return pojo
@@ -120,7 +122,13 @@ class Podcast:
 
     @classmethod
     def get_user_podcasts(cls, user_uid):
-        return (Podcast.from_dict(o.to_dict()) for o in cls.get_user_podcasts_documents(user_uid))
+        for podcast_document in cls.get_user_podcasts_documents(user_uid):
+            yield Podcast.from_document(podcast_document)
+
+    @classmethod
+    def get(cls, user_uid, podcast_id):
+        podcast_document = cls.get_user_podcasts_reference(user_uid).document(podcast_id)
+        return Podcast.from_document(podcast_document.get())
 
     @classmethod
     def save_user_podcasts(cls, user_uid, new_podcasts):
@@ -205,9 +213,16 @@ class Podcast:
         for link in dict_["links"]:
             links.append(Link.from_dict(link))
 
-        return Podcast(name=dict_["name"],
+        return Podcast(id=dict_["id"],
+                       name=dict_["name"],
                        description=dict_["description"],
                        links=links)
+
+    @staticmethod
+    def from_document(document):
+        document_dict = document.to_dict()
+        document_dict["id"] = document.id
+        return Podcast.from_dict(document_dict)
 
 
 class Link:

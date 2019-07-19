@@ -16,6 +16,7 @@ from apps.auth.utils import is_authenticated, get_authenticated_user
 from apps.auth.utils import session_login, session_logout
 from apps.auth.utils import required_authenticated
 from apps.podcast import Podcast
+from apps.tasks import require_cron_job, require_task_api_key
 from apps.tasks import add_task
 import settings
 
@@ -25,29 +26,6 @@ app = Flask(__name__)
 app.secret_key = bytes(settings.SECRET_KEY, "utf-8")
 firebase_app = firebase_admin.initialize_app()
 db = firestore.client()
-
-
-def require_cron_job(function):
-    """DECORATOR"""
-    @wraps(function)
-    def decorated_function(*args, **kwargs):
-        if request.headers.get("X-Appengine-Cron") == "true":
-            return function(*args, **kwargs)
-        else:
-            abort(401)
-
-    return decorated_function
-
-
-def require_task_api_key(function):
-    """DECORATOR"""
-    @wraps(function)
-    def decorated_function(*args, **kwargs):
-        if request.args.get("TASK_API_KEY") == settings.TASK_API_KEY:
-            return function(*args, **kwargs)
-        else:
-            abort(401)
-    return decorated_function
 
 
 @app.route('/')
@@ -107,10 +85,6 @@ def podcasts_edit():
     import traceback
 
     user = get_authenticated_user()
-
-
-    print(dir(user))
-
     if request.method == 'POST':
         content = request.form["yaml"]
         try:
@@ -133,7 +107,7 @@ def task_start_parsing():
 
 
 @app.route('/internal/queue-users', methods=["GET", "POST"])
-@require_task_api_key
+#@require_task_api_key
 def task_queue_users():
     users = firebase_admin.auth.list_users().iterate_all()
     for user in users:
@@ -146,19 +120,27 @@ def task_queue_users():
 
 
 @app.route('/internal/queue-podcasts', methods=["GET", "POST"])
-@require_task_api_key
+#@require_task_api_key
 def task_queue_podcasts():
-    user_uid
+    user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
     podcasts = Podcast.get_user_podcasts(user_uid)
     for podcast in podcasts:
-        add_task(url_for("task_parse_podcast"), {"podcast_uid": podcast.uid})
+        add_task(url_for("task_parse_podcast"), {"user_uid": user_uid,
+                                                 "podcast_id": podcast.id})
     return OK_RESPONSE
 
 
 @app.route('/internal/parse-podcast', methods=["GET", "POST"])
-@require_task_api_key
+#@require_task_api_key
 def task_parse_podcast():
-    pass
+    user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
+    podcast_id = "3uE19VtYuFrCDTqmsOx3"  # request.form.get("podcast_id")
+    podcast = Podcast.get(user_uid, podcast_id)
+
+    import feedparser
+    x = feedparser.parse(podcast.links[0].url)
+    return podcast.links[0].url
+    return OK_RESPONSE
 
 
 @app.context_processor
@@ -173,6 +155,11 @@ def inject_dict_for_all_templates():
 
 @app.after_request
 def add_header(response):
+    """
+
+    :param response:
+    :return:
+    """
     response.cache_control.public = True
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"

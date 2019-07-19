@@ -1,4 +1,32 @@
+from flask import abort
+from flask import request
+from functools import wraps
 from google.cloud import tasks_v2
+
+import settings
+
+
+def require_cron_job(function):
+    """DECORATOR"""
+    @wraps(function)
+    def decorated_function(*args, **kwargs):
+        if request.headers.get("X-Appengine-Cron") == "true":
+            return function(*args, **kwargs)
+        else:
+            abort(401)
+
+    return decorated_function
+
+
+def require_task_api_key(function):
+    """DECORATOR"""
+    @wraps(function)
+    def decorated_function(*args, **kwargs):
+        if request.form.get("TASK_API_KEY") == settings.TASK_API_KEY:
+            return function(*args, **kwargs)
+        else:
+            abort(401)
+    return decorated_function
 
 
 def add_task(relative_uri, form_data=None):
