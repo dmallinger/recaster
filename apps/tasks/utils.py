@@ -30,6 +30,12 @@ def require_task_api_key(function):
 
 
 def add_task(relative_uri, form_data=None):
+    """
+
+    :param relative_uri:
+    :param form_data:
+    :return:
+    """
     if form_data is None:
         form_data = {}
     form_data["TASK_API_KEY"] = settings.TASK_API_KEY

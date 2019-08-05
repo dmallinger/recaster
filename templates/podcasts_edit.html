@@ -8,6 +8,7 @@
                 {% if yaml_error %}
                     <div class="error-msg">Sorry, but your YAML was incorrectly formatted.  Please confirm in an online parser before submitting.
                     </div>
+                    <div>{{ traceback }}</div>
                 {% endif %}
 
                 <textarea name="yaml" rows="30" cols="50">{{ podcast_yaml }}</textarea>

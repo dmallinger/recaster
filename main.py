@@ -1,3 +1,4 @@
+import traceback
 import yaml
 
 import firebase_admin.auth
@@ -30,11 +31,13 @@ db = firestore.client()
 
 @app.route('/')
 def home():
+    """Homepage"""
     return render_template("home.html")
 
 
 @app.route('/login/')
 def login():
+    """Login page"""
     return render_template("login.html")
 
 
@@ -54,6 +57,7 @@ def authenticate():
 
 @app.route('/logout/')
 def logout():
+    """Logs user out of current session and then redirects home"""
     session_logout()
     return redirect(url_for("home"))
 
@@ -71,6 +75,10 @@ def podcast(podcast_id):
 @app.route('/podcasts/')
 @required_authenticated
 def podcasts_list():
+    """View all podcasts for this user.
+
+    :return: the template of all podcasts for this user. rendered to view.
+    """
     user = get_authenticated_user()
     podcasts = Podcast.get_user_podcasts(user.uid)
 
@@ -80,10 +88,11 @@ def podcasts_list():
 @app.route('/edit-podcasts/', methods=["GET", "POST"])
 @required_authenticated
 def podcasts_edit():
+    """Allow a user to edit their list of podcasts as a YAML file
 
-    from apps.podcast.podcast import Podcast
-    import traceback
-
+    :return: Renders the template of podcasts initially and redirects to
+             podcast_list upon successful update.
+    """
     user = get_authenticated_user()
     if request.method == 'POST':
         content = request.form["yaml"]
@@ -92,8 +101,9 @@ def podcasts_edit():
             Podcast.save_user_podcasts(user.uid, podcasts)
             return redirect(url_for("podcasts_list"))
         except Exception as e:
+            content = Podcast.get_user_podcasts_yaml(user.uid)
             tb = traceback.format_exc()
-            return render_template("podcasts_edit.html", podcast_yaml=tb, yaml_error=True)
+            return render_template("podcasts_edit.html", podcast_yaml=content, traceback=tb, yaml_error=True)
     else:
         content = Podcast.get_user_podcasts_yaml(user.uid)
         return render_template("podcasts_edit.html", podcast_yaml=content)
@@ -102,6 +112,11 @@ def podcasts_edit():
 @app.route('/internal/start-parsing', methods=["GET", "POST"])
 @require_cron_job
 def task_start_parsing():
+    """Cron job starts parsing.  Calls tasks as these can (depending on
+    configuration) run for longer than ordinary crons and web calls.
+
+    :return: Ok
+    """
     add_task(url_for("task_queue_users"))
     return OK_RESPONSE
 
@@ -109,6 +124,11 @@ def task_start_parsing():
 @app.route('/internal/queue-users', methods=["GET", "POST"])
 #@require_task_api_key
 def task_queue_users():
+    """Second step in parsing.  Gets all users and makes a task
+    for each one to parse their updated podcasts.
+
+    :return: Ok
+    """
     users = firebase_admin.auth.list_users().iterate_all()
     for user in users:
         if user.disabled:  # skip disabled users
@@ -122,6 +142,11 @@ def task_queue_users():
 @app.route('/internal/queue-podcasts', methods=["GET", "POST"])
 #@require_task_api_key
 def task_queue_podcasts():
+    """Third step in parsing.  Massively parallelize by making a separate
+    task for each podcast when parsing.
+
+    :return: Ok
+    """
     user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
     podcasts = Podcast.get_user_podcasts(user_uid)
     for podcast in podcasts:
@@ -133,6 +158,11 @@ def task_queue_podcasts():
 @app.route('/internal/parse-podcast', methods=["GET", "POST"])
 #@require_task_api_key
 def task_parse_podcast():
+    """Fourth step in parsing.  Parse the feed text and queue tasks
+    for downloading/converting content.
+
+    :return: Ok
+    """
     user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
     podcast_id = "3uE19VtYuFrCDTqmsOx3"  # request.form.get("podcast_id")
     podcast = Podcast.get(user_uid, podcast_id)
@@ -143,8 +173,30 @@ def task_parse_podcast():
     return OK_RESPONSE
 
 
+@app.route('/internal/download-podcast', methods=["GET", "POST"])
+#@require_task_api_key
+def task_download_podcast():
+    """Fifth and last step in parsing.  Download the content and save it.
+
+    :return: Ok
+    """
+    user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
+    podcast_id = "3uE19VtYuFrCDTqmsOx3"  # request.form.get("podcast_id")
+    podcast = Podcast.get(user_uid, podcast_id)
+
+    import feedparser
+    x = feedparser.parse(podcast.links[0].url)
+    return podcast.links[0].url
+    return OK_RESPONSE
+
+
+
 @app.context_processor
 def inject_dict_for_all_templates():
+    """Adds variables to the templates for all templates.
+
+    :return: A dictionary of variables
+    """
     global_vars = {}
 
     if is_authenticated():
@@ -155,10 +207,10 @@ def inject_dict_for_all_templates():
 
 @app.after_request
 def add_header(response):
-    """
+    """Alter the response object to include no-cache headers.
 
-    :param response:
-    :return:
+    :param response: The response object for the view being rendered
+    :return: an updated response object
     """
     response.cache_control.public = True
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -169,6 +221,11 @@ def add_header(response):
 
 @app.errorhandler(401)
 def unauthorized_access_handler(e):
+    """Render unauthorized access
+
+    :param e: error object
+    :return: Template for the 401 page.
+    """
     return render_template("401.html")
 
 
