@@ -9,14 +9,17 @@ from flask import Flask
 from flask import render_template
 from flask import redirect
 from flask import request
+from flask import Response
 from flask import session
 from flask import url_for
 from functools import wraps
 
 from apps.auth.utils import is_authenticated, get_authenticated_user
 from apps.auth.utils import session_login, session_logout
-from apps.auth.utils import required_authenticated
+from apps.auth.utils import require_authenticated
 from apps.podcast import Podcast
+from apps.podcast.podcast import update_user_podcasts_with_yaml, create_user_podcasts_yaml
+from apps.podcast.parser import parse_podcast, get_parser_class
 from apps.tasks import require_cron_job, require_task_api_key
 from apps.tasks import add_task
 import settings
@@ -62,18 +65,19 @@ def logout():
     return redirect(url_for("home"))
 
 
-@app.route('/podcast/<podcast_id>/')
-def podcast(podcast_id):
+@app.route('/podcast/<user_uid>/<podcast_id>/')
+def podcast(user_uid, podcast_id):
     """Render RSS for specified podcast
 
     :param podcast_id: Podcast to render
     :return: RSS feed
     """
-    pass
+    podcast = Podcast.load(user_uid, podcast_id)
+    return Response(podcast.feed.to_rss(), mimetype="text/xml")
 
 
 @app.route('/podcasts/')
-@required_authenticated
+@require_authenticated
 def podcasts_list():
     """View all podcasts for this user.
 
@@ -86,7 +90,7 @@ def podcasts_list():
 
 
 @app.route('/edit-podcasts/', methods=["GET", "POST"])
-@required_authenticated
+@require_authenticated
 def podcasts_edit():
     """Allow a user to edit their list of podcasts as a YAML file
 
@@ -97,15 +101,14 @@ def podcasts_edit():
     if request.method == 'POST':
         content = request.form["yaml"]
         try:
-            podcasts = Podcast.parse_user_podcasts_yaml(content)
-            Podcast.save_user_podcasts(user.uid, podcasts)
+            podcasts = update_user_podcasts_with_yaml(user.uid, content)
             return redirect(url_for("podcasts_list"))
         except Exception as e:
-            content = Podcast.get_user_podcasts_yaml(user.uid)
+            content = create_user_podcasts_yaml(user.uid)
             tb = traceback.format_exc()
             return render_template("podcasts_edit.html", podcast_yaml=content, traceback=tb, yaml_error=True)
     else:
-        content = Podcast.get_user_podcasts_yaml(user.uid)
+        content = create_user_podcasts_yaml(user.uid)
         return render_template("podcasts_edit.html", podcast_yaml=content)
 
 
@@ -164,31 +167,43 @@ def task_parse_podcast():
     :return: Ok
     """
     user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
-    podcast_id = "3uE19VtYuFrCDTqmsOx3"  # request.form.get("podcast_id")
-    podcast = Podcast.get(user_uid, podcast_id)
+    podcast_id = "MIK6zJyd5nmwHFcLPML2"  # request.form.get("podcast_id")
 
-    import feedparser
-    x = feedparser.parse(podcast.links[0].url)
-    return podcast.links[0].url
+    podcast = Podcast.load(user_uid, podcast_id)
+    podcast.feed = parse_podcast(podcast)
+    podcast.save()
+    add_task(url_for("task_recursive_download_podcast"),
+                     {"user_uid": user_uid, "podcast_id": podcast_id})
     return OK_RESPONSE
 
 
 @app.route('/internal/download-podcast', methods=["GET", "POST"])
 #@require_task_api_key
-def task_download_podcast():
+def task_recursive_download_podcast():
     """Fifth and last step in parsing.  Download the content and save it.
-
+    We make this recursive because the free tier of App Engine limits the
+    length of time a process can run for.  This will (hopefully) allow us
+    to download a greater number of files without running over time limits.
     :return: Ok
     """
-    user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
-    podcast_id = "3uE19VtYuFrCDTqmsOx3"  # request.form.get("podcast_id")
-    podcast = Podcast.get(user_uid, podcast_id)
+    user_uid = request.form.get("user_uid")
+    podcast_id = request.form.get("podcast_id")
+    podcast = Podcast.load(user_uid, podcast_id)
+    feed = podcast.feed  # required
 
-    import feedparser
-    x = feedparser.parse(podcast.links[0].url)
-    return podcast.links[0].url
-    return OK_RESPONSE
+    for entry in feed.entries[::-1]:
+        if not entry.downloaded:
+            parser_class = get_parser_class(entry.parser)
+            parser = parser_class()
+            blob = parser.download(entry.link)
+            entry.link = blob.public_url
+            entry.downloaded = True
+            podcast.feed = feed
+            podcast.save()
 
+            add_task(url_for("task_recursive_download_podcast"),
+                     {"user_uid": user_uid, "podcast_id": podcast_id})
+            return OK_RESPONSE
 
 
 @app.context_processor

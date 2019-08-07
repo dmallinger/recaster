@@ -3,7 +3,10 @@
 {% block content %}
     <ul>
         {% for podcast in podcasts %}
-            <li>{{ podcast.name }}
+            <li>
+                <a href="{{ url_for("podcast", user_uid=podcast.user_uid, podcast_id=podcast.id) }}">
+                    {{ podcast.title }}
+                </a>
                 <ul>
                     {% for link in podcast.links %}
                         <li>{{ link.url }} ({{ link.parser }})</li>

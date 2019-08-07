@@ -1,35 +1,8 @@
+import pickle
 import yaml
 from firebase_admin import firestore
+from uuid import uuid4
 
-"""
-podcast (unique by (user_id, url, parser))
-    id
-    user_id
-    name
-    description
-    links
-    listing  # the rss feed in custom objects
-
-episode (unique by (podcast, parser)
-    id
-    podcast_uid
-    parser
-    content
-    
-    
-    
-- name: Cumtown
-  description: Disgusting
-  links:
-    - url: google.com
-      parser: rss
-    - url: yahoo.com
-      parser: old
-
-- podcast
-    - name: 
-
-"""
 
 ANONYMOUS_USER_ID = None
 USER_PODCAST_COLLECTION = "users-podcasts"
@@ -48,28 +21,36 @@ class PodcastParserFormatException(Exception):
 
 
 class Podcast:
-    def __init__(self, name, description, url=None, parser=None, links=None, id=None):
-        """
-
-        :param name:
-        :param description:
-        :param url:
-        :param parser:
-        """
-        if links is None and url is None:
-            raise Exception("Podcast must be initialized with either a URL or a links object.")
-
-        if links is not None and url is not None:
-            raise Exception("Cannot provide both links and url to Podcast.")
-
-        self.id = id
-        self.name = name
+    """Class represents a podcast as a name, description, and other parameters.  Becomes the
+    base object for all podcasts.  Additionally, provides class and static methods for working
+    with and querying for podcasts.
+    """
+    def __init__(self, user_uid, title, description, links, id=None, feed=None):
+        self.id = id if id is not None else str(uuid4())
+        self.user_uid = user_uid
+        self.title = title
         self.description = description
+        self.links = links
+        self.feed = feed
 
-        if links is not None:
-            self.links = links
-        else:
-            self.links = [Link(url=url, parser=parser)]
+    def __repr__(self):
+        return "\"{}\" Podcast".format(self.title)
+
+    def __hash__(self):
+        links = tuple([(link.url, link.parser) for link in self.links])
+        elements = (self.id, self.user_uid, self.title, self.description, links)
+        return hash(elements)
+
+    def __eq__(self, other):
+        if not isinstance(other, Podcast):
+            raise TypeError("Cannot compare Podcast with non-Podcast type.")
+        return hash(self) == hash(other)
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def __cmp__(self, other):
+        raise NotImplementedError("Podcast does not support ordered comparison, only equality.")
 
     @property
     def links(self):
@@ -79,150 +60,182 @@ class Podcast:
     def links(self, links):
         self._links = sorted(links)
 
-    def __repr__(self):
-        return "\"{}\" Podcast".format(self.name)
+    @property
+    def feed(self):
+        return pickle.loads(self._feed)
 
-    def __hash__(self):
-        return hash(self.get_link_tuples())
+    @feed.setter
+    def feed(self, feed):
+        self._feed = pickle.dumps(feed)
 
-    def __eq__(self, other):
-        if not isinstance(other, Podcast):
-            raise TypeError("Cannot compare Podcast with non-Podcast type.")
-
-        # Links are kept in a sorted form to make comparisons fast
-        return self.name == other.name and self.links == other.links
-
-    def __ne__(self, other):
-        return not (self == other)
-
-    def __cmp__(self, other):
-        raise NotImplementedError("Podcast does not support ordered comparison, only equality.")
-
-    def get_link_tuples(self):
-        return [(link.url, link.parser) for link in self.links]
+    def save(self):
+        podcast_document = self._get_user_podcasts_reference(self.user_uid).document(self.id)
+        podcast_document.set(self.to_dict())
 
     def to_dict(self):
         pojo = {"id": self.id,
-                "name": self.name,
+                "user_uid": self.user_uid,
+                "title": self.title,
                 "description": self.description,
-                "links": [link.to_dict() for link in self.links]}
+                "links": [link.to_dict() for link in self.links],
+                "feed": self._feed}
         return pojo
 
     @classmethod
-    def get_user_podcasts_reference(cls, user_uid):
+    def load(cls, user_uid, podcast_id):
+        document = cls._get_user_podcasts_reference(user_uid).document(podcast_id).get()
+        if not document.exists:
+            raise Exception("Podcast not found")
+        return cls.from_document(document)
+
+    @classmethod
+    def from_document(cls, document):
+        data = document.to_dict()
+        links = []
+        for link_pojo in data["links"]:
+            link = Link(url=link_pojo["url"], parser=link_pojo["parser"])
+            links.append(link)
+        return Podcast(id=document.id,
+                       user_uid=data["user_uid"],
+                       title=data["title"],
+                       description=data["description"],
+                       links=links,
+                       feed=pickle.loads(data["feed"]))
+
+    @classmethod
+    def _get_user_podcasts_reference(cls, user_uid):
         db = firestore.client()
         return db.collection(USER_PODCAST_COLLECTION) \
                  .document(user_uid) \
                  .collection(PODCAST_COLLECTION)
 
     @classmethod
-    def get_user_podcasts_documents(cls, user_uid):
-        reference = cls.get_user_podcasts_reference(user_uid)
-        return reference.get()
-
-    @classmethod
     def get_user_podcasts(cls, user_uid):
-        for podcast_document in cls.get_user_podcasts_documents(user_uid):
-            yield Podcast.from_document(podcast_document)
+        podcasts = []
+        collection = cls._get_user_podcasts_reference(user_uid).get()
+        for document in collection:
+            podcasts.append(cls.from_document(document))
+        return podcasts
 
     @classmethod
-    def get(cls, user_uid, podcast_id):
-        podcast_document = cls.get_user_podcasts_reference(user_uid).document(podcast_id)
-        return Podcast.from_document(podcast_document.get())
+    def add_user_podcasts(cls, user_uid, new_podcasts):
+        total_podcasts = len(new_podcasts)
+        db = firestore.client()
+        batch = db.batch()
+        existing_podcasts = cls.get_user_podcasts(user_uid)
+        matched_podcasts = []
+
+        # For every existing podcast, see if it has a match in the new list of podcasts.
+        # If a match exists, note that.  We'll look for all the
+        # podcasts that didn't have a match later so that we can add them.
+        for podcast in existing_podcasts:
+            if podcast in new_podcasts:
+                matched_podcasts.append(podcast)
+            else:
+                total_podcasts += 1
+
+        if total_podcasts > MAX_PODCASTS:
+            raise Exception("Users cannot have more than {} podcasts.".format(MAX_PODCASTS))
+
+        # Add all the podcasts that didn't have a match.
+        user_podcasts_reference = cls._get_user_podcasts_reference(user_uid)
+        user_podcasts_document = user_podcasts_reference.document()
+        for podcast in new_podcasts:
+            if podcast not in matched_podcasts:
+                batch.set(user_podcasts_document, podcast.to_dict())
+
+        batch.commit()
 
     @classmethod
-    def save_user_podcasts(cls, user_uid, new_podcasts):
+    def remove_user_podcasts(cls, user_uid, podcasts):
+        db = firestore.client()
+        batch = db.batch()
+        user_podcasts_documents = cls._get_user_podcasts_reference(user_uid).get()
+
+        # For every existing podcast, see if it has a match in the list of podcasts.
+        for document in user_podcasts_documents:
+            podcast = cls.from_document(document)
+            if podcast in podcasts:
+                batch.delete(document.reference)
+        batch.commit()
+
+    @classmethod
+    def update_user_podcasts(cls, user_uid, updated_podcasts):
         """
 
         :param new_podcasts:
         :return:
         """
-        db = firestore.client()
-
-        if len(new_podcasts) > MAX_PODCASTS:
-            raise Exception("Users cannot have more than {} podcasts.".format(MAX_PODCASTS))
-
-        batch = db.batch()
-
-        user_podcasts_documents = cls.get_user_podcasts_documents(user_uid)
-        matched_podcasts = []
+        user_podcasts_documents = cls._get_user_podcasts_reference(user_uid).get()
+        podcasts_to_delete = []
 
         # For every existing podcast, see if it has a match in the new list of podcasts.
         # If no match exists, delete it.  If a match exists, note that.  We'll look for all the
         # podcasts that didn't have a match later so that we can add them.
         for document in user_podcasts_documents:
-            podcast = Podcast.from_dict(document.to_dict())
-            if podcast not in new_podcasts:
-                batch.delete(document.reference)
-            else:
-                matched_podcasts.append(podcast)
+            podcast = Podcast.from_document(document)
+            if podcast not in updated_podcasts:
+                podcasts_to_delete.append(podcast)
 
-        # Add all the podcasts that didn't have a match.
-        user_podcasts_reference = cls.get_user_podcasts_reference(user_uid)
-        for podcast in new_podcasts:
-            if podcast not in matched_podcasts:
-                document = user_podcasts_reference.document()
-                batch.set(document, podcast.to_dict())
+        cls.add_user_podcasts(user_uid, updated_podcasts)
+        cls.remove_user_podcasts(user_uid, podcasts_to_delete)
 
-        batch.commit()
 
-    @classmethod
-    def parse_user_podcasts_yaml(cls, text):
-        podcasts = []
+def update_user_podcasts_with_yaml(user_uid, text):
+    """
 
-        try:
-            pojos = yaml.load(text, Loader=yaml.SafeLoader)
-        except Exception as e:
-            raise PodcastParserYamlException("Invalid YAML passed to PodcastParser.")
-
-        if pojos is None:  # empty contents
-            return podcasts
-
-        try:
-            for podcast_config in pojos:
-                podcast = Podcast.from_dict(podcast_config)
-
-                if MAX_PODCAST_LINKS < len(podcast.links):
-                    raise Exception(
-                        "More than max of \"{}\" podcast links provided in YAML per podcast.".format(MAX_PODCAST_LINKS))
-
-                podcasts.append(podcast)
-        except KeyError as e:
-            raise KeyError("Missing Podcast key: {}".format(e))
-
+    :param user_uid:
+    :param text:
+    :return:
+    """
+    podcasts = []
+    # load
+    try:
+        pojos = yaml.load(text, Loader=yaml.SafeLoader)
+    except Exception as e:
+        raise PodcastParserYamlException("Invalid YAML passed to PodcastParser.")
+    # empty contents
+    if pojos is None:
         return podcasts
 
-    @classmethod
-    def get_user_podcasts_yaml(cls, user_uid):
-        """Given a user_uid, returns their podcast configuration in dynamic yaml.
+    try:
+        for podcast_config in pojos:
+            links = []
+            for link_pojo in podcast_config["links"]:
+                link = Link(url=link_pojo["url"], parser=link_pojo["parser"])
+                links.append(link)
 
-        :param user_uid: User in question
-        :return: The string yaml contents representing said user's podcast configuration.
-        """
-        podcasts = cls.get_user_podcasts(user_uid)
-        podcast_pojos = [o.to_dict() for o in podcasts]
+            if MAX_PODCAST_LINKS < len(links):
+                raise Exception(
+                    "More than max of \"{}\" podcast links provided in YAML per podcast.".format(MAX_PODCAST_LINKS))
 
-        if 0 == len(podcast_pojos):  # since we start with an empty list
-            return ""
-        else:
-            return yaml.dump(podcast_pojos, sort_keys=False)
+            podcast = Podcast(user_uid=user_uid,
+                              title=podcast_config["title"],
+                              description=podcast_config["description"],
+                              links=links)
+            podcasts.append(podcast)
+    except KeyError as e:
+        raise KeyError("Missing Podcast key: {}".format(e))
 
-    @staticmethod
-    def from_dict(dict_):
-        links = []
-        for link in dict_["links"]:
-            links.append(Link.from_dict(link))
+    Podcast.update_user_podcasts(user_uid, podcasts)
+    return podcasts
 
-        return Podcast(id=dict_["id"],
-                       name=dict_["name"],
-                       description=dict_["description"],
-                       links=links)
 
-    @staticmethod
-    def from_document(document):
-        document_dict = document.to_dict()
-        document_dict["id"] = document.id
-        return Podcast.from_dict(document_dict)
+def create_user_podcasts_yaml(user_uid):
+    podcasts = Podcast.get_user_podcasts(user_uid)
+    podcast_pojos = []
+
+    for podcast in podcasts:
+        links = [{"url": link.url, "parser": link.parser} for link in podcast.links]
+        pojo = {"title": podcast.title,
+                "description": podcast.description,
+                "links": links}
+        podcast_pojos.append(pojo)
+
+    if 0 == len(podcast_pojos):  # since we start with an empty list
+        return ""
+    else:
+        return yaml.dump(podcast_pojos, sort_keys=False)
 
 
 class Link:
@@ -244,18 +257,10 @@ class Link:
     def __lt__(self, other):
         return (self.url, self.parser) < (other.url, other.parser)
 
-    # def __cmp__(self, other):
-    #     return cmp((self.url, self.parser), (other.url, other.parser))
-
     def to_dict(self):
         return {"url": self.url, "parser": self.parser}
 
     @staticmethod
     def from_dict(link):
         return Link(url=link["url"], parser=link["parser"])
-
-
-class Episode:
-    pass
-
 

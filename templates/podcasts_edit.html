@@ -8,7 +8,7 @@
                 {% if yaml_error %}
                     <div class="error-msg">Sorry, but your YAML was incorrectly formatted.  Please confirm in an online parser before submitting.
                     </div>
-                    <div>{{ traceback }}</div>
+                    <pre>{{ traceback }}</pre>
                 {% endif %}
 
                 <textarea name="yaml" rows="30" cols="50">{{ podcast_yaml }}</textarea>
@@ -33,15 +33,15 @@
 
             Example:<br/>
             <pre>
-- name: Econtalk
+- title: Econtalk
   description: Fascinating interviews by an economist.
   links:
-  - url: google.com
+  - url: http://files.libertyfund.org/econtalk/EconTalk.xml
     parser: rss
-  - url: yahoo.com
-    parser: old
+  - url: https://www.youtube.com/channel/UCWNVDDLiexqiHNULPQ3kGxg
+    parser: youtube-audio
 
-- name: MMABeat
+- title: MMABeat
   description: The classiest of MMA podcasts
   links:
   - url: play.google.com
