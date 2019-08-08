@@ -37,7 +37,7 @@ class Podcast:
         return "\"{}\" Podcast".format(self.title)
 
     def __hash__(self):
-        links = tuple([(link.url, link.parser) for link in self.links])
+        links = tuple([(link.url, link.parser) for link in sorted(self.links)])
         elements = (self.id, self.user_uid, self.title, self.description, links)
         return hash(elements)
 
@@ -69,7 +69,7 @@ class Podcast:
         self._feed = pickle.dumps(feed)
 
     def save(self):
-        podcast_document = self._get_user_podcasts_reference(self.user_uid).document(self.id)
+        podcast_document = self._get_user_podcasts_collection(self.user_uid).document(self.id)
         podcast_document.set(self.to_dict())
 
     def to_dict(self):
@@ -83,9 +83,9 @@ class Podcast:
 
     @classmethod
     def load(cls, user_uid, podcast_id):
-        document = cls._get_user_podcasts_reference(user_uid).document(podcast_id).get()
+        document = cls._get_user_podcasts_collection(user_uid).document(podcast_id).get()
         if not document.exists:
-            raise Exception("Podcast not found")
+            raise Exception("Podcast not found: {}/{}".format(user_uid, podcast_id))
         return cls.from_document(document)
 
     @classmethod
@@ -103,46 +103,34 @@ class Podcast:
                        feed=pickle.loads(data["feed"]))
 
     @classmethod
-    def _get_user_podcasts_reference(cls, user_uid):
+    def _get_user_podcasts_collection(cls, user_uid):
         db = firestore.client()
         return db.collection(USER_PODCAST_COLLECTION) \
                  .document(user_uid) \
                  .collection(PODCAST_COLLECTION)
 
     @classmethod
+    def get_user_collection(cls):
+        db = firestore.client()
+        return db.collection(USER_PODCAST_COLLECTION)
+
+    @classmethod
     def get_user_podcasts(cls, user_uid):
         podcasts = []
-        collection = cls._get_user_podcasts_reference(user_uid).get()
+        collection = cls._get_user_podcasts_collection(user_uid).get()
         for document in collection:
             podcasts.append(cls.from_document(document))
         return podcasts
 
     @classmethod
     def add_user_podcasts(cls, user_uid, new_podcasts):
-        total_podcasts = len(new_podcasts)
         db = firestore.client()
         batch = db.batch()
-        existing_podcasts = cls.get_user_podcasts(user_uid)
-        matched_podcasts = []
 
-        # For every existing podcast, see if it has a match in the new list of podcasts.
-        # If a match exists, note that.  We'll look for all the
-        # podcasts that didn't have a match later so that we can add them.
-        for podcast in existing_podcasts:
-            if podcast in new_podcasts:
-                matched_podcasts.append(podcast)
-            else:
-                total_podcasts += 1
-
-        if total_podcasts > MAX_PODCASTS:
-            raise Exception("Users cannot have more than {} podcasts.".format(MAX_PODCASTS))
-
-        # Add all the podcasts that didn't have a match.
-        user_podcasts_reference = cls._get_user_podcasts_reference(user_uid)
+        user_podcasts_reference = cls._get_user_podcasts_collection(user_uid)
         user_podcasts_document = user_podcasts_reference.document()
         for podcast in new_podcasts:
-            if podcast not in matched_podcasts:
-                batch.set(user_podcasts_document, podcast.to_dict())
+            batch.set(user_podcasts_document, podcast.to_dict())
 
         batch.commit()
 
@@ -150,7 +138,7 @@ class Podcast:
     def remove_user_podcasts(cls, user_uid, podcasts):
         db = firestore.client()
         batch = db.batch()
-        user_podcasts_documents = cls._get_user_podcasts_reference(user_uid).get()
+        user_podcasts_documents = cls._get_user_podcasts_collection(user_uid).get()
 
         # For every existing podcast, see if it has a match in the list of podcasts.
         for document in user_podcasts_documents:
@@ -166,18 +154,19 @@ class Podcast:
         :param new_podcasts:
         :return:
         """
-        user_podcasts_documents = cls._get_user_podcasts_reference(user_uid).get()
+        existing_podcasts = cls.get_user_podcasts(user_uid)
+        podcasts_to_add = []
         podcasts_to_delete = []
 
-        # For every existing podcast, see if it has a match in the new list of podcasts.
-        # If no match exists, delete it.  If a match exists, note that.  We'll look for all the
-        # podcasts that didn't have a match later so that we can add them.
-        for document in user_podcasts_documents:
-            podcast = Podcast.from_document(document)
-            if podcast not in updated_podcasts:
-                podcasts_to_delete.append(podcast)
+        for old_podcast in existing_podcasts:
+            if old_podcast not in updated_podcasts:
+                podcasts_to_delete.append(old_podcast)
 
-        cls.add_user_podcasts(user_uid, updated_podcasts)
+        for new_podcast in updated_podcasts:
+            if new_podcast not in existing_podcasts:
+                podcasts_to_add.append(new_podcast)
+
+        cls.add_user_podcasts(user_uid, podcasts_to_add)
         cls.remove_user_podcasts(user_uid, podcasts_to_delete)
 
 

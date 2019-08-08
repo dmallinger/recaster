@@ -1,6 +1,8 @@
 import datetime
 import feedparser
+import ffmpeg
 import google.cloud.storage
+import hashlib
 import html
 import re
 import urllib.parse
@@ -42,8 +44,15 @@ class Feed:
         self.title = title
         self.description = description
         self.link = link
-        sorted_entries = sorted(entries, key=lambda entry: entry.published, reverse=True)
-        self.entries = sorted_entries
+        self.entries = entries
+        self._sort_entries()
+
+    def _sort_entries(self):
+        self.entries = sorted(self.entries, key=lambda entry: entry.published, reverse=True)
+
+    def add(self, entry):
+        self.entries.append(entry)
+        self._sort_entries()
 
     def to_rss(self):
         """
@@ -68,6 +77,14 @@ class FeedEntry:
         self.link = link
         self.published = published
         self.downloaded = downloaded
+
+    def __eq__(self, other):
+        return self.parser == other.parser and \
+               self.link == other.link and \
+               self.published == other.published
+
+    def __ne__(self, other):
+        return not (self == other)
 
     def to_rss(self):
         formatted_date = datetime.datetime(*self.published[:6]).strftime("%c")
@@ -112,17 +129,20 @@ class AbstractParser:
         :return: The blob object of where the file is stored in Cloud Storage
         """
         storage_client = google.cloud.storage.Client()
-        with urllib.request.urlopen(url) as response:
-            filename = uuid4()
-            mimetype = response.info().get_content_type()
-            content = response.read()
-            reformatted_content = cls.format_download(content)
+        filename = hashlib.sha512(url.encode()).hexdigest()
+        content, mimetype = cls._download(url)
         bucket = storage_client.get_bucket(settings.PODCAST_STORAGE_BUCKET)
         blob = bucket.blob("{}{}".format(settings.PODCAST_STORAGE_PREFIX, filename))
-        blob.upload_from_string(reformatted_content, mimetype)
+        blob.upload_from_string(content, mimetype)
         blob.make_public()
         return blob
 
+    @classmethod
+    def _download(cls, url):
+        with urllib.request.urlopen(url) as response:
+            mimetype = response.info().get_content_type()
+            content = response.read()
+        return content, mimetype
 
 class RssParser(AbstractParser):
     NAME = "rss"
@@ -167,7 +187,7 @@ class YoutubeParser(AbstractParser):
             # that causes issues.
             video_url = video_url.split(",")[0]
         except KeyError as e:
-            video_url = ""
+            return None
 
         return FeedEntry(parser=self.NAME, title=title, description=description,
                          link=video_url, published=published)
@@ -175,6 +195,14 @@ class YoutubeParser(AbstractParser):
 
 class YoutubeAudioParser(YoutubeParser):
     NAME = "youtube-audio"
+
+    @classmethod
+    def _download(cls, url):
+        out, err = ffmpeg.input(url) \
+                         .audio \
+                         .output("pipe:", format="mp3", acodec="mp3") \
+                         .run(capture_stdout=True)
+        return out, "audio/mpeg"
 
 
 class YoutubeVideoParser(YoutubeParser):
@@ -200,5 +228,7 @@ def parse_podcast(podcast):
         feed = parser.parse_url(link.url)
         for entry in feed["entries"]:
             parsed_entry = parser.parse_entry(entry)
-            all_entries.append(parsed_entry)
-    return Feed(title=podcast.title, description=podcast.description, link="", entries=all_entries)
+            if parsed_entry is not None:
+                all_entries.append(parsed_entry)
+    return Feed(title=podcast.title, description=podcast.description,
+                link="", entries=all_entries)

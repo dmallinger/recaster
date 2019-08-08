@@ -2,8 +2,28 @@ from flask import abort
 from flask import request
 from functools import wraps
 from google.cloud import tasks_v2
+from urllib.parse import parse_qs
 
 import settings
+
+
+def get_task_arguments():
+    """Tasks are sent with binary encoding (required) and Flask doesn't seem
+    to parse that into request.form. So we use this function to get the
+    parameters sent.
+    Note that all parameters parse to lists.  So:
+        request.form.get("username")
+        becomes:
+        get_task_arguments()["username"][0]
+
+    :return: A dict of arguments to this task.
+    """
+    data = parse_qs(request.data.decode("utf-8"))
+    for key in data:
+        data[key] = data[key][0]
+    data.update(request.args)
+    data.update(request.form)
+    return data
 
 
 def require_cron_job(function):
@@ -32,7 +52,9 @@ def require_task_api_key(function):
     """
     @wraps(function)
     def decorated_function(*args, **kwargs):
-        if request.form.get("TASK_API_KEY") == settings.TASK_API_KEY:
+        data = get_task_arguments()
+        api_key = data["TASK_API_KEY"][0]
+        if api_key == settings.TASK_API_KEY:
             return function(*args, **kwargs)
         else:
             abort(401)

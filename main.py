@@ -1,4 +1,5 @@
 import traceback
+import sys
 import yaml
 
 import firebase_admin.auth
@@ -21,7 +22,7 @@ from apps.podcast import Podcast
 from apps.podcast.podcast import update_user_podcasts_with_yaml, create_user_podcasts_yaml
 from apps.podcast.parser import parse_podcast, get_parser_class
 from apps.tasks import require_cron_job, require_task_api_key
-from apps.tasks import add_task
+from apps.tasks import add_task, get_task_arguments
 import settings
 
 OK_RESPONSE = "Ok"
@@ -101,7 +102,7 @@ def podcasts_edit():
     if request.method == 'POST':
         content = request.form["yaml"]
         try:
-            podcasts = update_user_podcasts_with_yaml(user.uid, content)
+            update_user_podcasts_with_yaml(user.uid, content)
             return redirect(url_for("podcasts_list"))
         except Exception as e:
             content = create_user_podcasts_yaml(user.uid)
@@ -113,7 +114,7 @@ def podcasts_edit():
 
 
 @app.route('/internal/start-parsing', methods=["GET", "POST"])
-@require_cron_job
+#@require_cron_job
 def task_start_parsing():
     """Cron job starts parsing.  Calls tasks as these can (depending on
     configuration) run for longer than ordinary crons and web calls.
@@ -150,7 +151,9 @@ def task_queue_podcasts():
 
     :return: Ok
     """
-    user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
+    data = get_task_arguments()
+    user_uid = data["user_uid"]
+
     podcasts = Podcast.get_user_podcasts(user_uid)
     for podcast in podcasts:
         add_task(url_for("task_parse_podcast"), {"user_uid": user_uid,
@@ -166,14 +169,24 @@ def task_parse_podcast():
 
     :return: Ok
     """
-    user_uid = "dffhorRjiUO18wfvu4udW9ww8jp1"  # request.form.get("user_uid")
-    podcast_id = "MIK6zJyd5nmwHFcLPML2"  # request.form.get("podcast_id")
+    data = get_task_arguments()
+    user_uid = data["user_uid"]
+    podcast_id = data["podcast_id"]
 
     podcast = Podcast.load(user_uid, podcast_id)
-    podcast.feed = parse_podcast(podcast)
+    feed = podcast.feed  # performance. prevents pickling behind the scenes
+    new_feed = parse_podcast(podcast)
+
+    for entry in new_feed:
+        if any([entry.parser == e.parser and
+                entry.title == e.title and
+                entry.published == e.published for e in feed]):
+            continue
+        feed.add(entry)
+    podcast.feed = feed
     podcast.save()
     add_task(url_for("task_recursive_download_podcast"),
-                     {"user_uid": user_uid, "podcast_id": podcast_id})
+             {"user_uid": user_uid, "podcast_id": podcast_id})
     return OK_RESPONSE
 
 
@@ -186,24 +199,39 @@ def task_recursive_download_podcast():
     to download a greater number of files without running over time limits.
     :return: Ok
     """
-    user_uid = request.form.get("user_uid")
-    podcast_id = request.form.get("podcast_id")
-    podcast = Podcast.load(user_uid, podcast_id)
-    feed = podcast.feed  # required
+    data = get_task_arguments()
+    user_uid = data["user_uid"]
+    podcast_id = data["podcast_id"]
 
-    for entry in feed.entries[::-1]:
-        if not entry.downloaded:
+    podcast = Podcast.load(user_uid, podcast_id)
+    feed = podcast.feed  # performance: prevents behind-the-scenes repeat pickling
+
+    # THIS IS NOT A FOR LOOP
+    # this loop iterates over entries but breaks after it finds the first one
+    # needing downloading.  This is done to (severely) limit the runtime of the
+    # script as the app engine free tier limits task runtime.
+    for entry in feed.entries:
+        if entry.downloaded:
+            continue
+        else:
+            # use the parser to download content
+            # NOTE: this is where parsers like youtube-audio do their
+            # conversions.
             parser_class = get_parser_class(entry.parser)
             parser = parser_class()
             blob = parser.download(entry.link)
+            # update the entry to have our location and new
             entry.link = blob.public_url
             entry.downloaded = True
+            # update feed and save (recall feed has pointers to the updated entry)
             podcast.feed = feed
             podcast.save()
-
+            # call this task again.  this ensures the system (serially) downloads
+            # all the content for this URL
             add_task(url_for("task_recursive_download_podcast"),
                      {"user_uid": user_uid, "podcast_id": podcast_id})
-            return OK_RESPONSE
+            break
+    return OK_RESPONSE
 
 
 @app.context_processor
