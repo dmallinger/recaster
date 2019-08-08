@@ -3,6 +3,7 @@ import yaml
 from firebase_admin import firestore
 from uuid import uuid4
 
+from apps.podcast.parser import Feed
 
 ANONYMOUS_USER_ID = None
 USER_PODCAST_COLLECTION = "users-podcasts"
@@ -25,11 +26,15 @@ class Podcast:
     base object for all podcasts.  Additionally, provides class and static methods for working
     with and querying for podcasts.
     """
-    def __init__(self, user_uid, title, description, links, id=None, feed=None):
-        self.id = id if id is not None else str(uuid4())
+    def __init__(self, user_uid, title, description, image, links, id=None, feed=None):
+        if feed is None:
+            feed = Feed(title=title, description=description, image=image, link="", entries=[])
+
+        self.id = id
         self.user_uid = user_uid
         self.title = title
         self.description = description
+        self.image = image
         self.links = links
         self.feed = feed
 
@@ -37,7 +42,7 @@ class Podcast:
         return "\"{}\" Podcast".format(self.title)
 
     def __hash__(self):
-        links = tuple([(link.url, link.parser) for link in sorted(self.links)])
+        links = tuple([(link.url, link.parser) for link in self.links])
         elements = (self.id, self.user_uid, self.title, self.description, links)
         return hash(elements)
 
@@ -48,9 +53,6 @@ class Podcast:
 
     def __ne__(self, other):
         return not (self == other)
-
-    def __cmp__(self, other):
-        raise NotImplementedError("Podcast does not support ordered comparison, only equality.")
 
     @property
     def links(self):
@@ -73,10 +75,10 @@ class Podcast:
         podcast_document.set(self.to_dict())
 
     def to_dict(self):
-        pojo = {"id": self.id,
-                "user_uid": self.user_uid,
+        pojo = {"user_uid": self.user_uid,
                 "title": self.title,
                 "description": self.description,
+                "image": self.image,
                 "links": [link.to_dict() for link in self.links],
                 "feed": self._feed}
         return pojo
@@ -99,6 +101,7 @@ class Podcast:
                        user_uid=data["user_uid"],
                        title=data["title"],
                        description=data["description"],
+                       image=data["image"],
                        links=links,
                        feed=pickle.loads(data["feed"]))
 
@@ -159,15 +162,46 @@ class Podcast:
         podcasts_to_delete = []
 
         for old_podcast in existing_podcasts:
-            if old_podcast not in updated_podcasts:
+            if not any([old_podcast.title == p.title and
+                        old_podcast.description == p.description and
+                        old_podcast.links == p.links for p in updated_podcasts]):
                 podcasts_to_delete.append(old_podcast)
 
         for new_podcast in updated_podcasts:
-            if new_podcast not in existing_podcasts:
+            if not any([new_podcast.title == p.title and
+                        new_podcast.description == p.description and
+                        new_podcast.links == p.links for p in existing_podcasts]):
                 podcasts_to_add.append(new_podcast)
 
         cls.add_user_podcasts(user_uid, podcasts_to_add)
         cls.remove_user_podcasts(user_uid, podcasts_to_delete)
+
+
+class Link:
+    def __init__(self, url, parser):
+        self.url = url
+        self.parser = parser
+
+    def __hash__(self):
+        return hash((self.url, self.parser))
+
+    def __eq__(self, other):
+        if not isinstance(other, Link):
+            raise TypeError("Link cannot be compared with \"{}\" type.".format(type(other)))
+        return self.url == other.url and self.parser == other.parser
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def __lt__(self, other):
+        return (self.url, self.parser) < (other.url, other.parser)
+
+    def to_dict(self):
+        return {"url": self.url, "parser": self.parser}
+
+    @staticmethod
+    def from_dict(link):
+        return Link(url=link["url"], parser=link["parser"])
 
 
 def update_user_podcasts_with_yaml(user_uid, text):
@@ -201,6 +235,7 @@ def update_user_podcasts_with_yaml(user_uid, text):
             podcast = Podcast(user_uid=user_uid,
                               title=podcast_config["title"],
                               description=podcast_config["description"],
+                              image=podcast_config["image"],
                               links=links)
             podcasts.append(podcast)
     except KeyError as e:
@@ -218,6 +253,7 @@ def create_user_podcasts_yaml(user_uid):
         links = [{"url": link.url, "parser": link.parser} for link in podcast.links]
         pojo = {"title": podcast.title,
                 "description": podcast.description,
+                "image": podcast.image,
                 "links": links}
         podcast_pojos.append(pojo)
 
@@ -227,29 +263,4 @@ def create_user_podcasts_yaml(user_uid):
         return yaml.dump(podcast_pojos, sort_keys=False)
 
 
-class Link:
-    def __init__(self, url, parser):
-        self.url = url
-        self.parser = parser
-
-    def __hash__(self):
-        return hash((self.url, self.parser))
-
-    def __eq__(self, other):
-        if not isinstance(other, Link):
-            raise TypeError("Link cannot be compared with \"{}\" type.".format(type(other)))
-        return self.url == other.url and self.parser == other.parser
-
-    def __ne__(self, other):
-        return not (self == other)
-
-    def __lt__(self, other):
-        return (self.url, self.parser) < (other.url, other.parser)
-
-    def to_dict(self):
-        return {"url": self.url, "parser": self.parser}
-
-    @staticmethod
-    def from_dict(link):
-        return Link(url=link["url"], parser=link["parser"])
 

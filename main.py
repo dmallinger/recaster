@@ -20,7 +20,7 @@ from apps.auth.utils import session_login, session_logout
 from apps.auth.utils import require_authenticated
 from apps.podcast import Podcast
 from apps.podcast.podcast import update_user_podcasts_with_yaml, create_user_podcasts_yaml
-from apps.podcast.parser import parse_podcast, get_parser_class
+from apps.podcast.parser import parse_podcast, get_parser_class, DownloadException
 from apps.tasks import require_cron_job, require_task_api_key
 from apps.tasks import add_task, get_task_arguments
 import settings
@@ -114,7 +114,7 @@ def podcasts_edit():
 
 
 @app.route('/internal/start-parsing', methods=["GET", "POST"])
-#@require_cron_job
+@require_cron_job
 def task_start_parsing():
     """Cron job starts parsing.  Calls tasks as these can (depending on
     configuration) run for longer than ordinary crons and web calls.
@@ -126,7 +126,7 @@ def task_start_parsing():
 
 
 @app.route('/internal/queue-users', methods=["GET", "POST"])
-#@require_task_api_key
+@require_task_api_key
 def task_queue_users():
     """Second step in parsing.  Gets all users and makes a task
     for each one to parse their updated podcasts.
@@ -144,7 +144,7 @@ def task_queue_users():
 
 
 @app.route('/internal/queue-podcasts', methods=["GET", "POST"])
-#@require_task_api_key
+@require_task_api_key
 def task_queue_podcasts():
     """Third step in parsing.  Massively parallelize by making a separate
     task for each podcast when parsing.
@@ -162,7 +162,7 @@ def task_queue_podcasts():
 
 
 @app.route('/internal/parse-podcast', methods=["GET", "POST"])
-#@require_task_api_key
+@require_task_api_key
 def task_parse_podcast():
     """Fourth step in parsing.  Parse the feed text and queue tasks
     for downloading/converting content.
@@ -177,10 +177,10 @@ def task_parse_podcast():
     feed = podcast.feed  # performance. prevents pickling behind the scenes
     new_feed = parse_podcast(podcast)
 
-    for entry in new_feed:
+    for entry in new_feed.entries:
         if any([entry.parser == e.parser and
                 entry.title == e.title and
-                entry.published == e.published for e in feed]):
+                entry.published == e.published for e in feed.entries]):
             continue
         feed.add(entry)
     podcast.feed = feed
@@ -191,7 +191,7 @@ def task_parse_podcast():
 
 
 @app.route('/internal/download-podcast', methods=["GET", "POST"])
-#@require_task_api_key
+@require_task_api_key
 def task_recursive_download_podcast():
     """Fifth and last step in parsing.  Download the content and save it.
     We make this recursive because the free tier of App Engine limits the
@@ -219,9 +219,15 @@ def task_recursive_download_podcast():
             # conversions.
             parser_class = get_parser_class(entry.parser)
             parser = parser_class()
-            blob = parser.download(entry.link)
-            # update the entry to have our location and new
-            entry.link = blob.public_url
+
+            try:
+                blob = parser.download(entry.link)
+                # update the entry to have our location and new
+                entry.link = blob.public_url
+            except DownloadException:
+                # no ability to download, so keep the original URL and move on.
+                pass
+
             entry.downloaded = True
             # update feed and save (recall feed has pointers to the updated entry)
             podcast.feed = feed

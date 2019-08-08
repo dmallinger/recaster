@@ -53,7 +53,7 @@ def require_task_api_key(function):
     @wraps(function)
     def decorated_function(*args, **kwargs):
         data = get_task_arguments()
-        api_key = data["TASK_API_KEY"][0]
+        api_key = data.get("TASK_API_KEY")
         if api_key == settings.TASK_API_KEY:
             return function(*args, **kwargs)
         else:
