@@ -24,7 +24,11 @@ def session_logout():
 
 def is_authenticated():
     """Does the current session have a user?"""
-    return USER_KEY in session
+    if USER_KEY in session:
+        user = get_authenticated_user()
+        if user is not None and not user.disabled:
+            return True
+    return False
 
 
 def get_authenticated_user():
@@ -33,12 +37,15 @@ def get_authenticated_user():
     :return: Firebase user object"""
     db = firestore.client()
 
-    if not is_authenticated():
+    if USER_KEY not in session:
         raise Exception("No active session")
     else:
-        user_uid = session[USER_KEY]
-        user = firebase_admin.auth.get_user(user_uid)
-        return user
+        try:
+            user_uid = session[USER_KEY]
+            user = firebase_admin.auth.get_user(user_uid)
+            return user
+        except firebase_admin.auth.AuthError as e:
+            return None
 
 
 def require_authenticated(function):

@@ -237,8 +237,8 @@ def update_user_podcasts_with_yaml(user_uid, text):
 
             podcast = Podcast(user_uid=user_uid,
                               title=podcast_config["title"],
-                              description=podcast_config["description"],
-                              image=podcast_config["image"],
+                              description=podcast_config["description"] or "",
+                              image=podcast_config["image"] or "",
                               links=links)
             podcasts.append(podcast)
     except KeyError as e:
