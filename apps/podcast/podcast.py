@@ -3,7 +3,7 @@ import yaml
 from firebase_admin import firestore
 from uuid import uuid4
 
-from apps.podcast.parser import Feed
+from apps.podcast.parser import Feed, PARSER
 
 ANONYMOUS_USER_ID = None
 USER_PODCAST_COLLECTION = "users-podcasts"
@@ -225,7 +225,10 @@ def update_user_podcasts_with_yaml(user_uid, text):
         for podcast_config in pojos:
             links = []
             for link_pojo in podcast_config["links"]:
-                link = Link(url=link_pojo["url"], parser=link_pojo["parser"])
+                parser = link_pojo["parser"]
+                if parser not in PARSER:
+                    raise ValueError("Invalid parser name")
+                link = Link(url=link_pojo["url"], parser=parser)
                 links.append(link)
 
             if MAX_PODCAST_LINKS < len(links):

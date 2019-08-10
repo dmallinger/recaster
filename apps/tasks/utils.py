@@ -35,7 +35,7 @@ def require_cron_job(function):
     """
     @wraps(function)
     def decorated_function(*args, **kwargs):
-        if request.headers.get("X-Appengine-Cron") == "true":
+        if request.headers.get("X-Cloudscheduler") == "true":
             return function(*args, **kwargs)
         else:
             abort(401)

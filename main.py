@@ -133,6 +133,10 @@ def task_queue_users():
 
     :return: Ok
     """
+    import logging
+    logging.warning(request.headers)
+
+
     users = firebase_admin.auth.list_users().iterate_all()
     for user in users:
         if user.disabled:  # skip disabled users

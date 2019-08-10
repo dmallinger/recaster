@@ -1,15 +1,16 @@
 # Google app engine project name
-PROJECT = "my-project"
+PROJECT = ""
 
 # for Flask- required for sessions
 SECRET_KEY = ""
 
-# Should someone be able to make a new podcast without logging in?
-ALLOW_ANONYMOUS_USERS = True
-
 # Information about the Cloud Task queue we use for parsing feeds
 PODCAST_PARSING_QUEUE_NAME = ""
-PODCAST_PARSING_QUEUE_LOCATION = "us-east"
+PODCAST_PARSING_QUEUE_LOCATION = ""
+
+# Information about the Cloud Storage used for storing podcasts
+PODCAST_STORAGE_BUCKET = ""
+PODCAST_STORAGE_PREFIX = ""
 
 # NOT from Google
 # Used to ensure that Task URLs aren't started by robots or others on the web.

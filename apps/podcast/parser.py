@@ -139,8 +139,8 @@ class AbstractParser:
         :return: The blob object of where the file is stored in Cloud Storage
         """
         storage_client = google.cloud.storage.Client()
-        filename = hashlib.sha512(url.encode()).hexdigest()
-        content, mimetype = cls._download(url)
+        content, download_url, mimetype = cls._download(url)
+        filename = hashlib.sha512(download_url.encode()).hexdigest()
         bucket = storage_client.get_bucket(settings.PODCAST_STORAGE_BUCKET)
         blob = bucket.blob("{}{}".format(settings.PODCAST_STORAGE_PREFIX, filename))
         blob.upload_from_string(content, mimetype)
@@ -152,7 +152,7 @@ class AbstractParser:
         with urllib.request.urlopen(url) as response:
             mimetype = response.info().get_content_type()
             content = response.read()
-        return content, mimetype
+        return content, url, mimetype
 
 
 class RssParser(AbstractParser):
@@ -161,6 +161,7 @@ class RssParser(AbstractParser):
 
 class YoutubeParser(AbstractParser):
     NAME = "youtube"
+    VALID_ITAGS = None
 
     def parse_url(self, url):
         with urllib.request.urlopen(url) as response:
@@ -184,64 +185,37 @@ class YoutubeParser(AbstractParser):
             content = response.read().decode("utf-8")
         query_string = parse_qs(urllib.parse.unquote(content))
 
-        if "player_response" in query_string:
-            content = query_string["player_response"][0]
-            content = content.replace("\\u0026", "&")
-            video_url = YOUTUBE_VIDEO_URL_REGEX1.search(content).groups()[0]
+        if " codecs" in query_string:
+            codecs = query_string[" codecs"]
+        elif "codecs" in query_string:
+            codecs = query_string["codecs"]
+        else:
+            raise DownloadException("Could not find 'codecs' key in Youtube response!")
+
+        for codec in codecs:
             try:
-                content, mimetype = cls._process_video(video_url)
-                return content, mimetype
-            except ffmpeg.Error as e:
-                raise DownloadException("Could not process video URL")
+                video_url = re.search(r'''"url":"([^"]+)''', codec).groups()[0].replace("\\u0026", "&")
+                mimetype = re.search(r'''"mimeType":"([^"]+)''', codec).groups()[0]
+                itag = int(re.search(r'''"itag":(\d+)''', codec).groups()[0])
 
-        if "url" in query_string:
-            # TODO: Look into this. Youtube has many (10+) urls listed for
-            # some videos.  Formats are different.
-            # Also, sometimes youtube returns invalid
-            # codes because the video is listed as "unplayable."  Unclear
-            # why these still show up in Youtube feeds.
-            for video_url in query_string["url"]:
-                # some mp4 videos on youtube seem to have extra information after the URL
-                # that causes issues.
-                video_url = video_url.split(",")[0]
-                try:
-                    content, mimetype = cls._process_video(video_url)
-                    return content, mimetype
-                except ffmpeg.Error as e:
-                    raise DownloadException("Could not find video URL")
-            else:
-                raise DownloadException("No convertible video url found.")
+                if itag in cls.VALID_ITAGS:
+                    with urllib.request.urlopen(video_url) as response:
+                        content = response.read()
+                        return content, video_url, mimetype
+            except AttributeError as e:
+                pass
 
-        raise DownloadException("Could not find video URL")
-
-    @classmethod
-    def _process_video(cls, url):
-        raise NotImplementedError("YoutubeParser is abstract and does not process videos.")
+        raise DownloadException("Could not find a valid video URL")
 
 
 class YoutubeAudioParser(YoutubeParser):
     NAME = "youtube-audio"
-
-    @classmethod
-    def _process_video(cls, url):
-        out, err = ffmpeg.input(url) \
-            .audio \
-            .output("pipe:", format="mp3", acodec="mp3") \
-            .run(capture_stdout=True)
-        return out, "audio/mpeg"
+    VALID_ITAGS = [139, 140, 141]
 
 
 class YoutubeVideoParser(YoutubeParser):
     NAME = "youtube-video"
-
-    @classmethod
-    def _process_video(cls, url):
-        # We removed processing due to audio track loss on certain files with ffmpeg.
-        # Currently store/serve the raw video
-        with urllib.request.urlopen(url) as response:
-            content = response.read()
-            mimetype = response.info().get_content_type()
-            return content, mimetype
+    VALID_ITAGS = [18, 22, 37]
 
 
 PARSER = {
@@ -252,10 +226,20 @@ PARSER = {
 
 
 def get_parser_class(name):
+    """Return the class of the parser with this name
+
+    :param name: name of pasrser in PARSER
+    :return: parser class
+    """
     return PARSER[name]
 
 
 def parse_podcast(podcast):
+    """Utility function takes a podcast and returns a Feed
+
+    :param podcast:
+    :return:
+    """
     all_entries = []
     for link in podcast.links:
         parser_class = get_parser_class(link.parser)
