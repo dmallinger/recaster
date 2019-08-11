@@ -1,26 +1,22 @@
+import datetime
 import traceback
-import sys
-import yaml
 
 import firebase_admin.auth
 from firebase_admin import firestore
 
-from flask import abort
 from flask import Flask
 from flask import render_template
 from flask import redirect
 from flask import request
 from flask import Response
-from flask import session
 from flask import url_for
-from functools import wraps
 
 from apps.auth.utils import is_authenticated, get_authenticated_user
 from apps.auth.utils import session_login, session_logout
 from apps.auth.utils import require_authenticated
 from apps.podcast import Podcast
-from apps.podcast.podcast import update_user_podcasts_with_yaml, create_user_podcasts_yaml
-from apps.podcast.parser import parse_podcast, get_parser_class, DownloadException
+from apps.podcast.parser import get_parser_class, DownloadException
+from apps.podcast.utils import get_updated_feed, yaml_from_podcasts, podcasts_from_yaml
 from apps.tasks import require_cron_job, require_task_api_key
 from apps.tasks import add_task, get_task_arguments
 import settings
@@ -99,18 +95,43 @@ def podcasts_edit():
              podcast_list upon successful update.
     """
     user = get_authenticated_user()
+    yaml_error = False
+    tb = None
     if request.method == 'POST':
         content = request.form["yaml"]
         try:
-            update_user_podcasts_with_yaml(user.uid, content)
+            updated_podcasts = podcasts_from_yaml(user.uid, content)
+            existing_podcasts = Podcast.get_user_podcasts(user.uid)
+            podcasts_to_add = []
+            podcasts_to_delete = []
+
+            for old_podcast in existing_podcasts:
+                if not any([old_podcast.title == p.title and
+                            old_podcast.description == p.description and
+                            old_podcast.links == p.links for p in updated_podcasts]):
+                    podcasts_to_delete.append(old_podcast)
+
+            for new_podcast in updated_podcasts:
+                if not any([new_podcast.title == p.title and
+                            new_podcast.description == p.description and
+                            new_podcast.links == p.links for p in existing_podcasts]):
+                    podcasts_to_add.append(new_podcast)
+
+            Podcast.batch_add_user_podcasts(user.uid, podcasts_to_add)
+            Podcast.batch_remove_user_podcasts(user.uid, podcasts_to_delete)
+
             return redirect(url_for("podcasts_list"))
         except Exception as e:
-            content = create_user_podcasts_yaml(user.uid)
+            yaml_error = True
             tb = traceback.format_exc()
-            return render_template("podcasts_edit.html", podcast_yaml=content, traceback=tb, yaml_error=True)
-    else:
-        content = create_user_podcasts_yaml(user.uid)
-        return render_template("podcasts_edit.html", podcast_yaml=content)
+
+    # create yaml from the user podcasts
+    podcasts = Podcast.get_user_podcasts(user.uid)
+    content = yaml_from_podcasts(podcasts)
+    return render_template("podcasts_edit.html",
+                           podcast_yaml=content,
+                           yaml_error=yaml_error,
+                           traceback=tb)
 
 
 @app.route('/internal/start-parsing', methods=["GET", "POST"])
@@ -176,7 +197,7 @@ def task_recursive_download_podcast():
 
     podcast = Podcast.load(user_uid, podcast_id)
     feed = podcast.feed  # performance: prevents behind-the-scenes repeat pickling
-    new_feed = parse_podcast(podcast)
+    new_feed = get_updated_feed(podcast)
 
     new_entry = None
     for e in new_feed.entries:
@@ -203,6 +224,7 @@ def task_recursive_download_podcast():
     # update feed and save (recall feed has pointers to the updated entry)
     feed.add(new_entry)
     podcast.feed = feed
+    podcast.last_updated = datetime.datetime.utcnow()
     podcast.save()
     # call this task again.  this ensures the system (serially) downloads
     # all the content for this URL

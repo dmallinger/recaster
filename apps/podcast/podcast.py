@@ -1,25 +1,55 @@
 import datetime
+import html
 import pickle
-import yaml
+from flask import request, url_for
 from firebase_admin import firestore
 from uuid import uuid4
 
-from apps.podcast.parser import Feed, PARSER
 
-ANONYMOUS_USER_ID = None
+RSS_HEADER_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:googleplay="http://www.google.com/schemas/play-podcasts/1.0">
+<channel>
+  <title>{title}</title>
+  <link>{link}</link>
+  <atom:link href="{link}" rel="self" type="application/rss+xml"></atom:link>
+  <description>{description}</description>
+  <image>
+    <url>{image}</url>
+    <title>{title}</title>
+    <link>{link}</link>
+  </image>
+  <itunes:image href="{image}"></itunes:image>
+  <itunes:category text="Technology">
+    <itunes:category text="Podcasting"/>
+  </itunes:category>
+  <itunes:owner>
+    <itunes:name>{title}</itunes:name>
+    <itunes:email>fake@fake.com</itunes:email>
+  </itunes:owner>
+  <pubDate>{last_updated}</pubDate>
+  <lastBuildDate>{last_updated}</lastBuildDate>
+  <googleplay:block>yes</googleplay:block>
+  <itunes:block>Yes</itunes:block>
+  <language>en-US</language>
+  """
+
+RSS_FOOTER_TEMPLATE = """</channel>
+</rss>"""
+
+RSS_ENTRY_TEMPLATE = """
+  <item>
+    <title>{title}</title>
+    <link>{link}</link>
+    <description>{description}</description>
+    <guid>{guid}</guid>
+    <pubDate>{pubDate}</pubDate>
+    <enclosure url="{link}" length="{bytes}" type="{mimetype}"></enclosure>
+  </item>
+"""
+
 USER_PODCAST_COLLECTION = "users-podcasts"
 PODCAST_COLLECTION = "podcasts"
-
-MAX_PODCASTS = 100
 MAX_PODCAST_LINKS = 10
-
-
-class PodcastParserYamlException(Exception):
-    pass
-
-
-class PodcastParserFormatException(Exception):
-    pass
 
 
 class Podcast:
@@ -33,8 +63,9 @@ class Podcast:
         self.description = description
         self.image = image
         self.links = links
+        # optional params are only provided when loading from database
         self.id = id if id is not None else str(uuid4())
-        self.feed = feed if feed is not None else Feed(podcast=self)
+        self.feed = feed if feed is not None else Feed(user_uid=self.user_uid, podcast_id=self.id)
         self.last_updated = last_updated if last_updated is not None else datetime.datetime.utcnow()
 
     def __repr__(self):
@@ -127,7 +158,7 @@ class Podcast:
         return podcasts
 
     @classmethod
-    def add_user_podcasts(cls, user_uid, new_podcasts):
+    def batch_add_user_podcasts(cls, user_uid, new_podcasts):
         db = firestore.client()
         batch = db.batch()
 
@@ -139,7 +170,7 @@ class Podcast:
         batch.commit()
 
     @classmethod
-    def remove_user_podcasts(cls, user_uid, podcasts):
+    def batch_remove_user_podcasts(cls, user_uid, podcasts):
         db = firestore.client()
         batch = db.batch()
         user_podcasts_documents = cls._get_user_podcasts_collection(user_uid).get()
@@ -150,32 +181,6 @@ class Podcast:
             if podcast in podcasts:
                 batch.delete(document.reference)
         batch.commit()
-
-    @classmethod
-    def update_user_podcasts(cls, user_uid, updated_podcasts):
-        """
-
-        :param new_podcasts:
-        :return:
-        """
-        existing_podcasts = cls.get_user_podcasts(user_uid)
-        podcasts_to_add = []
-        podcasts_to_delete = []
-
-        for old_podcast in existing_podcasts:
-            if not any([old_podcast.title == p.title and
-                        old_podcast.description == p.description and
-                        old_podcast.links == p.links for p in updated_podcasts]):
-                podcasts_to_delete.append(old_podcast)
-
-        for new_podcast in updated_podcasts:
-            if not any([new_podcast.title == p.title and
-                        new_podcast.description == p.description and
-                        new_podcast.links == p.links for p in existing_podcasts]):
-                podcasts_to_add.append(new_podcast)
-
-        cls.add_user_podcasts(user_uid, podcasts_to_add)
-        cls.remove_user_podcasts(user_uid, podcasts_to_delete)
 
 
 class Link:
@@ -205,64 +210,68 @@ class Link:
         return Link(url=link["url"], parser=link["parser"])
 
 
-def update_user_podcasts_with_yaml(user_uid, text):
-    """
+class Feed:
+    def __init__(self, user_uid, podcast_id, entries=None):
+        self.user_uid = user_uid
+        self.podcast_id = podcast_id
+        self.entries = entries if entries is not None else []
+        self._sort_entries()
 
-    :param user_uid:
-    :param text:
-    :return:
-    """
-    podcasts = []
-    # load
-    try:
-        pojos = yaml.load(text, Loader=yaml.SafeLoader)
-    except Exception as e:
-        raise PodcastParserYamlException("Invalid YAML passed to PodcastParser.")
-    # empty contents
-    if pojos is None:
-        return podcasts
+    def _sort_entries(self):
+        self.entries = sorted(self.entries, key=lambda entry: entry.published, reverse=True)
 
-    try:
-        for podcast_config in pojos:
-            links = []
-            for link_pojo in podcast_config["links"]:
-                parser = link_pojo["parser"]
-                if parser not in PARSER:
-                    raise ValueError("Invalid parser name")
-                link = Link(url=link_pojo["url"], parser=parser)
-                links.append(link)
+    def add(self, entry):
+        self.entries.append(entry)
+        self._sort_entries()
 
-            if MAX_PODCAST_LINKS < len(links):
-                raise Exception(
-                    "More than max of \"{}\" podcast links provided in YAML per podcast.".format(MAX_PODCAST_LINKS))
+    def to_rss(self):
+        """
 
-            podcast = Podcast(user_uid=user_uid,
-                              title=podcast_config["title"],
-                              description=podcast_config["description"] or "",
-                              image=podcast_config["image"] or "",
-                              links=links)
-            podcasts.append(podcast)
-    except KeyError as e:
-        raise KeyError("Missing Podcast key: {}".format(e))
+        :return:
+        """
+        # ensure updated info
+        podcast = Podcast.load(self.user_uid, self.podcast_id)
+        link = "{}{}".format(request.url_root[0:-1],
+                             url_for("podcast", user_uid=podcast.user_uid, podcast_id=podcast.id))
 
-    Podcast.update_user_podcasts(user_uid, podcasts)
-    return podcasts
+        xml = RSS_HEADER_TEMPLATE.format(title=html.escape(podcast.title),
+                                         description=html.escape(podcast.description),
+                                         image=html.escape(podcast.image),
+                                         link=html.escape(link),
+                                         last_updated=podcast.last_updated.strftime("%c"))
+        for entry in self.entries:
+            xml = xml + entry.to_rss()
+
+        xml = xml + RSS_FOOTER_TEMPLATE
+        return xml
 
 
-def create_user_podcasts_yaml(user_uid):
-    podcasts = Podcast.get_user_podcasts(user_uid)
-    podcast_pojos = []
+class FeedEntry:
+    def __init__(self, parser, id, title, description, link, published):
+        self.id = id
+        self.parser = parser
+        self.title = title
+        self.description = description
+        self.link = link
+        self.published = published
+        self.bytes = 0
+        self.mimetype = None
 
-    for podcast in podcasts:
-        links = [{"url": link.url, "parser": link.parser} for link in podcast.links]
-        pojo = {"title": podcast.title,
-                "description": podcast.description,
-                "image": podcast.image,
-                "links": links}
-        podcast_pojos.append(pojo)
+    def __eq__(self, other):
+        return self.parser == other.parser and \
+               self.id == other.id
 
-    if 0 == len(podcast_pojos):  # since we start with an empty list
-        return ""
-    else:
-        return yaml.dump(podcast_pojos, sort_keys=False)
+    def __ne__(self, other):
+        return not (self == other)
 
+    def to_rss(self):
+        formatted_date = datetime.datetime(*self.published[:6]).strftime("%c")
+
+        xml = RSS_ENTRY_TEMPLATE.format(guid=self.id,
+                                        title=html.escape(self.title),
+                                        description=html.escape(self.description),
+                                        link=html.escape(self.link),
+                                        pubDate=formatted_date,
+                                        bytes=self.bytes,
+                                        mimetype=self.mimetype)
+        return xml
