@@ -1,3 +1,4 @@
+import datetime
 import pickle
 import yaml
 from firebase_admin import firestore
@@ -26,17 +27,15 @@ class Podcast:
     base object for all podcasts.  Additionally, provides class and static methods for working
     with and querying for podcasts.
     """
-    def __init__(self, user_uid, title, description, image, links, id=None, feed=None):
-        if feed is None:
-            feed = Feed(title=title, description=description, image=image, link="", entries=[])
-
-        self.id = id
+    def __init__(self, user_uid, title, description, image, links, id=None, feed=None, last_updated=None):
         self.user_uid = user_uid
         self.title = title
         self.description = description
         self.image = image
         self.links = links
-        self.feed = feed
+        self.id = id if id is not None else str(uuid4())
+        self.feed = feed if feed is not None else Feed(podcast=self)
+        self.last_updated = last_updated if last_updated is not None else datetime.datetime.utcnow()
 
     def __repr__(self):
         return "\"{}\" Podcast".format(self.title)
@@ -80,7 +79,8 @@ class Podcast:
                 "description": self.description,
                 "image": self.image,
                 "links": [link.to_dict() for link in self.links],
-                "feed": self._feed}
+                "feed": self._feed,
+                "last_updated": self.last_updated.timestamp()}
         return pojo
 
     @classmethod
@@ -103,7 +103,8 @@ class Podcast:
                        description=data["description"],
                        image=data["image"],
                        links=links,
-                       feed=pickle.loads(data["feed"]))
+                       feed=pickle.loads(data["feed"]),
+                       last_updated=datetime.datetime.utcfromtimestamp(data["last_updated"]))
 
     @classmethod
     def _get_user_podcasts_collection(cls, user_uid):
@@ -131,8 +132,8 @@ class Podcast:
         batch = db.batch()
 
         user_podcasts_reference = cls._get_user_podcasts_collection(user_uid)
-        user_podcasts_document = user_podcasts_reference.document()
         for podcast in new_podcasts:
+            user_podcasts_document = user_podcasts_reference.document(podcast.id)
             batch.set(user_podcasts_document, podcast.to_dict())
 
         batch.commit()
@@ -264,6 +265,4 @@ def create_user_podcasts_yaml(user_uid):
         return ""
     else:
         return yaml.dump(podcast_pojos, sort_keys=False)
-
-
 

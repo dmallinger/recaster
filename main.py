@@ -133,10 +133,6 @@ def task_queue_users():
 
     :return: Ok
     """
-    import logging
-    logging.warning(request.headers)
-
-
     users = firebase_admin.auth.list_users().iterate_all()
     for user in users:
         if user.disabled:  # skip disabled users
@@ -160,87 +156,79 @@ def task_queue_podcasts():
 
     podcasts = Podcast.get_user_podcasts(user_uid)
     for podcast in podcasts:
-        add_task(url_for("task_parse_podcast"), {"user_uid": user_uid,
-                                                 "podcast_id": podcast.id})
-    return OK_RESPONSE
-
-
-@app.route('/internal/parse-podcast', methods=["GET", "POST"])
-@require_task_api_key
-def task_parse_podcast():
-    """Fourth step in parsing.  Parse the feed text and queue tasks
-    for downloading/converting content.
-
-    :return: Ok
-    """
-    data = get_task_arguments()
-    user_uid = data["user_uid"]
-    podcast_id = data["podcast_id"]
-
-    podcast = Podcast.load(user_uid, podcast_id)
-    feed = podcast.feed  # performance. prevents pickling behind the scenes
-    new_feed = parse_podcast(podcast)
-
-    for entry in new_feed.entries:
-        if any([entry.parser == e.parser and
-                entry.title == e.title and
-                entry.published == e.published for e in feed.entries]):
-            continue
-        feed.add(entry)
-    podcast.feed = feed
-    podcast.save()
-    add_task(url_for("task_recursive_download_podcast"),
-             {"user_uid": user_uid, "podcast_id": podcast_id})
+        add_task(url_for("task_recursive_download_podcast"),
+                 {"user_uid": user_uid, "podcast_id": podcast.id})
     return OK_RESPONSE
 
 
 @app.route('/internal/download-podcast', methods=["GET", "POST"])
 @require_task_api_key
 def task_recursive_download_podcast():
-    """Fifth and last step in parsing.  Download the content and save it.
+    """Fourth and last step in parsing.  Download the content and save it.
     We make this recursive because the free tier of App Engine limits the
     length of time a process can run for.  This will (hopefully) allow us
     to download a greater number of files without running over time limits.
     :return: Ok
     """
+
+    import logging
+
     data = get_task_arguments()
     user_uid = data["user_uid"]
     podcast_id = data["podcast_id"]
 
     podcast = Podcast.load(user_uid, podcast_id)
     feed = podcast.feed  # performance: prevents behind-the-scenes repeat pickling
+    new_feed = parse_podcast(podcast)
 
-    # THIS IS NOT A FOR LOOP
-    # this loop iterates over entries but breaks after it finds the first one
-    # needing downloading.  This is done to (severely) limit the runtime of the
-    # script as the app engine free tier limits task runtime.
-    for entry in feed.entries:
-        if entry.downloaded:
-            continue
-        else:
-            # use the parser to download content
-            # NOTE: this is where parsers like youtube-audio do their
-            # conversions.
-            parser_class = get_parser_class(entry.parser)
-            parser = parser_class()
+    new_entry = None
+    for e in new_feed.entries:
+        if e not in feed.entries:
+            new_entry = e
+    if new_entry is None:
+        return OK_RESPONSE
 
-            try:
-                blob = parser.download(entry.link)
-                # update the entry to have our location and new
-                entry.link = blob.public_url
-            except DownloadException:
-                # no ability to download, so keep the original URL and move on.
-                pass
+    # use the parser to download content
+    # NOTE: this is where parsers like youtube-audio do their
+    # conversions.
+    parser_class = get_parser_class(new_entry.parser)
+    parser = parser_class()
 
-            entry.downloaded = True
-            # update feed and save (recall feed has pointers to the updated entry)
-            podcast.feed = feed
-            podcast.save()
-            # call this task again.  this ensures the system (serially) downloads
-            # all the content for this URL
-            add_task(url_for("task_recursive_download_podcast"),
-                     {"user_uid": user_uid, "podcast_id": podcast_id})
-            break
+    logging.warning("Attempting to download blob")
+
+    try:
+        # blob = parser.download(new_entry.link)
+        # # update the entry to have our location and new
+        # new_entry.link = blob.public_url
+        # new_entry.bytes = blob.size
+        # new_entry.mimetype = blob.content_type
+        new_entry.link = "http://www.google.com"
+        new_entry.bytes = 8
+        new_entry.mimetype = "text/html"
+    except DownloadException:
+        # no ability to download, so keep the original URL and move on.
+        pass
+    logging.warning("Appending to entry!")
+    # update feed and save (recall feed has pointers to the updated entry)
+    feed.add(new_entry)
+    podcast.title = "Fuck me"
+    logging.warning("Assigning:")
+    logging.warning(feed.entries)
+    podcast.feed = feed
+    logging.warning("And now assigned:")
+    logging.warning(podcast.feed.entries)
+    podcast.save()
+    logging.warning("Saved!")
+    logging.warning("And now loaded")
+    p2 = podcast.load(user_uid, podcast_id)
+    logging.warning(p2.feed.entries)
+
+    # call this task again.  this ensures the system (serially) downloads
+    # all the content for this URL
+    # NOTE: Because we return earlier if no new_entry is found, this ensures
+    # that we only re-queue download tasks in the event of new entries.
+    add_task(url_for("task_recursive_download_podcast"),
+             {"user_uid": user_uid, "podcast_id": podcast_id})
     return OK_RESPONSE
 
 

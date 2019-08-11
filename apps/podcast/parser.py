@@ -8,6 +8,7 @@ import re
 import urllib.parse
 import urllib.request
 
+from flask import url_for, request
 from urllib.parse import urlparse, parse_qs
 from uuid import uuid4
 
@@ -19,15 +20,31 @@ YOUTUBE_VIDEO_URL_REGEX1 = re.compile(r'''url":"([^"]*?)"''')
 CHANNEL_RSS_URL_TEMPLATE = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 VIDEO_INFO_URL_TEMPLATE = "http://youtube.com/get_video_info?video_id={}"
 
-RSS_HEADER_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" ?>
-<rss version="2.0">
+RSS_HEADER_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:googleplay="http://www.google.com/schemas/play-podcasts/1.0">
 <channel>
   <title>{title}</title>
   <link>{link}</link>
+  <atom:link href="{link}" rel="self" type="application/rss+xml"></atom:link>
   <description>{description}</description>
   <image>
     <url>{image}</url>
+    <title>{title}</title>
+    <link>{link}</link>
   </image>
+  <itunes:image href="{image}"></itunes:image>
+  <itunes:category text="Technology">
+    <itunes:category text="Podcasting"/>
+  </itunes:category>
+  <itunes:owner>
+    <itunes:name>{title}</itunes:name>
+    <itunes:email>fake@fake.com</itunes:email>
+  </itunes:owner>
+  <pubDate>{last_updated}</pubDate>
+  <lastBuildDate>{last_updated}</lastBuildDate>
+  <googleplay:block>yes</googleplay:block>
+  <itunes:block>Yes</itunes:block>
+  <language>en-US</language>
   """
 
 RSS_FOOTER_TEMPLATE = """</channel>
@@ -38,7 +55,9 @@ RSS_ENTRY_TEMPLATE = """
     <title>{title}</title>
     <link>{link}</link>
     <description>{description}</description>
+    <guid>{guid}</guid>
     <pubDate>{pubDate}</pubDate>
+    <enclosure url="{link}" length="{bytes}" type="{mimetype}"></enclosure>
   </item>
 """
 
@@ -48,12 +67,9 @@ class DownloadException(Exception):
 
 
 class Feed:
-    def __init__(self, title, description, image, link, entries):
-        self.title = title
-        self.description = description
-        self.image = image
-        self.link = link
-        self.entries = entries
+    def __init__(self, podcast, entries=None):
+        self.podcast = podcast
+        self.entries = entries if entries is not None else []
         self._sort_entries()
 
     def _sort_entries(self):
@@ -68,10 +84,19 @@ class Feed:
 
         :return:
         """
-        xml = RSS_HEADER_TEMPLATE.format(title=html.escape(self.title),
-                                         description=html.escape(self.description),
-                                         image=html.escape(self.image),
-                                         link=self.link)
+        # HACK! handles an import issue until we:
+        # TODO: refactor to move Parser in podcast.py
+        #  and then make this Podcast.load(self.user_uid, self.podcast_id)
+        # ensure updated info in our pickled podcast
+        podcast = self.podcast.load(self.podcast.user_uid, self.podcast.id)
+        link = "{}{}".format(request.url_root[0:-1],
+                              url_for("podcast", user_uid=podcast.user_uid, podcast_id=podcast.id))
+
+        xml = RSS_HEADER_TEMPLATE.format(title=html.escape(podcast.title),
+                                         description=html.escape(podcast.description),
+                                         image=html.escape(podcast.image),
+                                         link=html.escape(link),
+                                         last_updated=podcast.last_updated.strftime("%c"))
         for entry in self.entries:
             xml = xml + entry.to_rss()
 
@@ -80,18 +105,19 @@ class Feed:
 
 
 class FeedEntry:
-    def __init__(self, parser, title, description, link, published, downloaded=False):
+    def __init__(self, parser, id, title, description, link, published):
+        self.id = id
         self.parser = parser
         self.title = title
         self.description = description
         self.link = link
         self.published = published
-        self.downloaded = downloaded
+        self.bytes = 0
+        self.mimetype = None
 
     def __eq__(self, other):
         return self.parser == other.parser and \
-               self.link == other.link and \
-               self.published == other.published
+               self.id == other.id
 
     def __ne__(self, other):
         return not (self == other)
@@ -99,10 +125,13 @@ class FeedEntry:
     def to_rss(self):
         formatted_date = datetime.datetime(*self.published[:6]).strftime("%c")
 
-        xml = RSS_ENTRY_TEMPLATE.format(title=html.escape(self.title),
+        xml = RSS_ENTRY_TEMPLATE.format(guid=self.id,
+                                        title=html.escape(self.title),
                                         description=html.escape(self.description),
                                         link=html.escape(self.link),
-                                        pubDate=formatted_date)
+                                        pubDate=formatted_date,
+                                        bytes=self.bytes,
+                                        mimetype=self.mimetype)
         return xml
 
 
@@ -118,12 +147,14 @@ class AbstractParser:
         :param entry: The feed entry in question
         :return: An updated dictionary representing the feed
         """
+        id_ = entry["id"]
         title = entry["title"]
         description = entry["summary"]
         link = entry["link"]
         published = entry["published_parsed"]
-        return FeedEntry(parser=self.NAME, title=title, description=description,
-                         link=link, published=published)
+        return FeedEntry(parser=self.NAME, id=id_, title=title,
+                         description=description, link=link,
+                         published=published)
 
     @classmethod
     def format_download(cls, content):
@@ -175,6 +206,7 @@ class YoutubeParser(AbstractParser):
             channel_id = search_results.groups()[0]
             rss_url = CHANNEL_RSS_URL_TEMPLATE.format(channel_id)
         return feedparser.parse(rss_url)
+
 
     @classmethod
     def _download(cls, url):
@@ -249,5 +281,5 @@ def parse_podcast(podcast):
             parsed_entry = parser.parse_entry(entry)
             if parsed_entry is not None:
                 all_entries.append(parsed_entry)
-    return Feed(title=podcast.title, description=podcast.description,
-                image=podcast.image, link="", entries=all_entries)
+    return Feed(podcast=podcast,
+                entries=all_entries)
