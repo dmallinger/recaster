@@ -170,9 +170,6 @@ def task_recursive_download_podcast():
     to download a greater number of files without running over time limits.
     :return: Ok
     """
-
-    import logging
-
     data = get_task_arguments()
     user_uid = data["user_uid"]
     podcast_id = data["podcast_id"]
@@ -194,35 +191,19 @@ def task_recursive_download_podcast():
     parser_class = get_parser_class(new_entry.parser)
     parser = parser_class()
 
-    logging.warning("Attempting to download blob")
-
     try:
-        # blob = parser.download(new_entry.link)
-        # # update the entry to have our location and new
-        # new_entry.link = blob.public_url
-        # new_entry.bytes = blob.size
-        # new_entry.mimetype = blob.content_type
-        new_entry.link = "http://www.google.com"
-        new_entry.bytes = 8
-        new_entry.mimetype = "text/html"
+        blob = parser.download(new_entry.link)
+        # update the entry to have our location and new
+        new_entry.link = blob.public_url
+        new_entry.bytes = blob.size
+        new_entry.mimetype = blob.content_type
     except DownloadException:
         # no ability to download, so keep the original URL and move on.
         pass
-    logging.warning("Appending to entry!")
     # update feed and save (recall feed has pointers to the updated entry)
     feed.add(new_entry)
-    podcast.title = "Fuck me"
-    logging.warning("Assigning:")
-    logging.warning(feed.entries)
     podcast.feed = feed
-    logging.warning("And now assigned:")
-    logging.warning(podcast.feed.entries)
     podcast.save()
-    logging.warning("Saved!")
-    logging.warning("And now loaded")
-    p2 = podcast.load(user_uid, podcast_id)
-    logging.warning(p2.feed.entries)
-
     # call this task again.  this ensures the system (serially) downloads
     # all the content for this URL
     # NOTE: Because we return earlier if no new_entry is found, this ensures
