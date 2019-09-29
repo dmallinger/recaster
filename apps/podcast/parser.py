@@ -4,9 +4,7 @@ import hashlib
 import re
 import urllib.parse
 import urllib.request
-
-from urllib.parse import urlparse, parse_qs
-from .podcast import FeedEntry
+import youtube_dl
 
 import settings
 
@@ -21,28 +19,6 @@ class AbstractParser:
     def parse_url(self, url):
         """Parse a URL and return a list of dictionaries representing the feed."""
         return feedparser.parse(url)
-
-    def parse_entry(self, entry):
-        """Identity function can be overwritten by inheriting classes
-        to alter how entries in the RSS feed are parsed.
-
-        :param entry: The feed entry in question
-        :return: An updated dictionary representing the feed
-        """
-        id_ = entry["id"]
-        title = entry["title"]
-        description = entry["summary"]
-        link = entry["link"]
-        published = entry["published_parsed"]
-        return FeedEntry(parser=self.NAME, id=id_, title=title,
-                         description=description, link=link,
-                         published=published)
-
-    @classmethod
-    def format_download(cls, content):
-        """Identity function.  Can be overwritten by inheriting classes
-        to reformat video files, extract audio, etc."""
-        return content
 
     @classmethod
     def download(cls, url):
@@ -74,9 +50,8 @@ class RssParser(AbstractParser):
 
 class YoutubeParser(AbstractParser):
     NAME = "youtube"
-    VALID_ITAGS = None
+    VALID_ITAGS = []
     CHANNEL_RSS_URL_TEMPLATE = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
-    VIDEO_INFO_URL_TEMPLATE = "http://youtube.com/get_video_info?video_id={}"
 
     def parse_url(self, url):
         with urllib.request.urlopen(url) as response:
@@ -93,34 +68,21 @@ class YoutubeParser(AbstractParser):
 
     @classmethod
     def _download(cls, url):
-        video_id = parse_qs(urlparse(url).query)["v"][0]
-        info_link = cls.VIDEO_INFO_URL_TEMPLATE.format(video_id)
+        with youtube_dl.YoutubeDL({'outtmpl': '%(id)s%(ext)s'}) as ydl:
+            result = ydl.extract_info(url, download=False)
 
-        with urllib.request.urlopen(info_link) as response:
-            content = response.read().decode("utf-8")
-        query_string = parse_qs(urllib.parse.unquote(content))
-
-        if " codecs" in query_string:
-            codecs = query_string[" codecs"]
-        elif "codecs" in query_string:
-            codecs = query_string["codecs"]
+        if "entries" in result:
+            # Can be a playlist or a list of videos
+            video = result["entries"][0]
         else:
-            raise DownloadException("Could not find 'codecs' key in Youtube response!")
+            # Just a video
+            video = result
 
-        for codec in codecs:
-            try:
-                video_url = re.search(r'''"url":"([^"]+)''', codec).groups()[0].replace("\\u0026", "&")
-                mimetype = re.search(r'''"mimeType":"([^"]+)''', codec).groups()[0]
-                itag = int(re.search(r'''"itag":(\d+)''', codec).groups()[0])
-
-                if itag in cls.VALID_ITAGS:
-                    with urllib.request.urlopen(video_url) as response:
-                        content = response.read()
-                        return content, video_url, mimetype
-            except AttributeError as e:
-                pass
-
-        raise DownloadException("Could not find a valid video URL")
+        try:
+            file = [o for o in video["formats"] if int(o["format_id"]) in cls.VALID_ITAGS].pop(0)
+        except IndexError:
+            raise DownloadException("Could not find a valid video URL")
+        return super(YoutubeParser, cls)._download(file["url"])
 
 
 class YoutubeAudioParser(YoutubeParser):
@@ -130,21 +92,15 @@ class YoutubeAudioParser(YoutubeParser):
 
 class YoutubeVideoParser(YoutubeParser):
     NAME = "youtube-video"
-    VALID_ITAGS = [18, 22, 37]
+    VALID_ITAGS = [18, 22, 37, 43, 44, 45]
 
 
-PARSER = {
+PARSERS = {
     RssParser.NAME: RssParser,
     YoutubeAudioParser.NAME: YoutubeAudioParser,
     YoutubeVideoParser.NAME: YoutubeVideoParser
 }
 
 
-def get_parser_class(name):
-    """Return the class of the parser with this name
-
-    :param name: name of pasrser in PARSER
-    :return: parser class
-    """
-    return PARSER[name]
-
+def get_parser_class(parser):
+    return PARSERS[parser]

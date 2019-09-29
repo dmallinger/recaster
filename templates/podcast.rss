@@ -1,0 +1,40 @@
+{% autoescape true %}<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:googleplay="http://www.google.com/schemas/play-podcasts/1.0">
+    <channel>
+        <title>{{ title }}</title>
+        <link>{{ link }}</link>
+        <atom:link href="{{ link }}" rel="self" type="application/rss+xml"></atom:link>
+        <description>{{ description }}</description>
+        <image>
+            <url>{{ image }}</url>
+            <title>{{ title }}</title>
+            <link>{{ link }}</link>
+        </image>
+        <itunes:image href="{{ image }}"></itunes:image>
+        <itunes:category text="Technology">
+            <itunes:category text="Podcasting" />
+        </itunes:category>
+        <itunes:owner>
+            <itunes:name>{{ title }}</itunes:name>
+            <itunes:email>fake@fake.com</itunes:email>
+        </itunes:owner>
+        <pubDate>{{ last_updated }}</pubDate>
+        <lastBuildDate>{{ last_updated }}</lastBuildDate>
+        <googleplay:block>yes</googleplay:block>
+        <itunes:block>Yes</itunes:block>
+        <language>en-US</language>
+
+        {% for entry in entries %}
+            <item>
+                <title>{{ entry.title }}</title>
+                <link>{{ entry.link }}</link>
+                <description>{{ entry.description }}</description>
+                <guid>{{ entry.id }}</guid>
+                <pubDate>{{ entry.published_formatted }}</pubDate>
+                <enclosure url="{{ entry.link }}" length="{{ entry.bytes }}" type="{{ entry.mimetype }}"></enclosure>
+            </item>
+        {% endfor %}
+
+    </channel>
+</rss>
+{% endautoescape %}

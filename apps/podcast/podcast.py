@@ -1,55 +1,18 @@
 import datetime
-import html
+import email.utils
 import pickle
-from flask import request, url_for
+import urllib.request
+import yaml
+from flask import request, url_for, render_template
 from firebase_admin import firestore
 from uuid import uuid4
 
+from .parser import PARSERS
 
-RSS_HEADER_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:googleplay="http://www.google.com/schemas/play-podcasts/1.0">
-<channel>
-  <title>{title}</title>
-  <link>{link}</link>
-  <atom:link href="{link}" rel="self" type="application/rss+xml"></atom:link>
-  <description>{description}</description>
-  <image>
-    <url>{image}</url>
-    <title>{title}</title>
-    <link>{link}</link>
-  </image>
-  <itunes:image href="{image}"></itunes:image>
-  <itunes:category text="Technology">
-    <itunes:category text="Podcasting"/>
-  </itunes:category>
-  <itunes:owner>
-    <itunes:name>{title}</itunes:name>
-    <itunes:email>fake@fake.com</itunes:email>
-  </itunes:owner>
-  <pubDate>{last_updated}</pubDate>
-  <lastBuildDate>{last_updated}</lastBuildDate>
-  <googleplay:block>yes</googleplay:block>
-  <itunes:block>Yes</itunes:block>
-  <language>en-US</language>
-  """
-
-RSS_FOOTER_TEMPLATE = """</channel>
-</rss>"""
-
-RSS_ENTRY_TEMPLATE = """
-  <item>
-    <title>{title}</title>
-    <link>{link}</link>
-    <description>{description}</description>
-    <guid>{guid}</guid>
-    <pubDate>{pubDate}</pubDate>
-    <enclosure url="{link}" length="{bytes}" type="{mimetype}"></enclosure>
-  </item>
-"""
+import settings
 
 USER_PODCAST_COLLECTION = "users-podcasts"
 PODCAST_COLLECTION = "podcasts"
-MAX_PODCAST_LINKS = 10
 
 
 class Podcast:
@@ -113,6 +76,32 @@ class Podcast:
                 "feed": self._feed,
                 "last_updated": self.last_updated.timestamp()}
         return pojo
+
+    def to_feed(self):
+        all_entries = []
+        for link in self.links:
+            # get parser for this link
+            parser_class = PARSERS[link.parser]
+            parser = parser_class()
+            # parse the link feed
+            feed = parser.parse_url(link.url)
+            # for each entry, parse and append
+            for entry in feed["entries"]:
+                link_info = urllib.request.urlopen(entry["link"]).info()
+                bytes = link_info.get("Content-Length", 0)
+                mimetype = link_info.get("Content-Type", "")
+                feed_entry = FeedEntry(parser=parser.NAME,
+                                       id=entry["id"],
+                                       title=entry["title"],
+                                       description=entry["description"],
+                                       link=entry["link"],
+                                       published=entry["published_parsed"],
+                                       bytes=bytes,
+                                       mimetype=mimetype)
+                all_entries.append(feed_entry)
+        return Feed(user_uid=self.user_uid,
+                    podcast_id=self.id,
+                    entries=all_entries)
 
     @classmethod
     def load(cls, user_uid, podcast_id):
@@ -182,6 +171,47 @@ class Podcast:
                 batch.delete(document.reference)
         batch.commit()
 
+    @classmethod
+    def podcasts_from_yaml(cls, user_uid, text):
+        podcasts = []
+        pojos = yaml.load(text, Loader=yaml.SafeLoader)
+        for podcast_config in pojos:
+            links = []
+            for link_pojo in podcast_config["links"]:
+                parser = link_pojo["parser"]
+                if parser not in PARSERS:
+                    raise ValueError("Invalid parser name")
+                link = Link(url=link_pojo["url"], parser=parser)
+                links.append(link)
+
+            if settings.MAX_PODCAST_LINKS < len(links):
+                raise Exception(
+                    "More than max of \"{}\" podcast links provided in YAML per podcast.".format(settings.MAX_PODCAST_LINKS))
+
+            podcast = Podcast(user_uid=user_uid,
+                              title=podcast_config["title"],
+                              description=podcast_config["description"] or "",  # optional
+                              image=podcast_config["image"],
+                              links=links)
+            podcasts.append(podcast)
+        return podcasts
+
+    @classmethod
+    def podcasts_to_yaml(cls, podcasts):
+        podcast_pojos = []
+        for podcast in podcasts:
+            links = [{"url": link.url, "parser": link.parser} for link in podcast.links]
+            pojo = {"title": podcast.title,
+                    "description": podcast.description,
+                    "image": podcast.image,
+                    "links": links}
+            podcast_pojos.append(pojo)
+
+        if 0 == len(podcast_pojos):  # since we start with an empty list
+            return ""
+        else:
+            return yaml.dump(podcast_pojos, sort_keys=False)
+
 
 class Link:
     def __init__(self, url, parser):
@@ -225,37 +255,32 @@ class Feed:
         self._sort_entries()
 
     def to_rss(self):
-        """
-
-        :return:
-        """
         # ensure updated info
         podcast = Podcast.load(self.user_uid, self.podcast_id)
         link = "{}{}".format(request.url_root[0:-1],
                              url_for("podcast", user_uid=podcast.user_uid, podcast_id=podcast.id))
 
-        xml = RSS_HEADER_TEMPLATE.format(title=html.escape(podcast.title),
-                                         description=html.escape(podcast.description),
-                                         image=html.escape(podcast.image),
-                                         link=html.escape(link),
-                                         last_updated=podcast.last_updated.strftime("%c"))
-        for entry in self.entries:
-            xml = xml + entry.to_rss()
+        return render_template("podcast.rss",
+                               title=podcast.title,
+                               description=podcast.description,
+                               image=podcast.image,
+                               link=link,
+                               last_updated=email.utils.format_datetime(podcast.last_updated),
+                               entries=self.entries)
 
-        xml = xml + RSS_FOOTER_TEMPLATE
-        return xml
 
 
 class FeedEntry:
-    def __init__(self, parser, id, title, description, link, published):
+    def __init__(self, parser, id, title, description, link, published, bytes, mimetype):
         self.id = id
         self.parser = parser
         self.title = title
         self.description = description
         self.link = link
         self.published = published
-        self.bytes = 0
-        self.mimetype = None
+        self.bytes = bytes
+        self.mimetype = mimetype
+        self.published_formatted = email.utils.format_datetime(datetime.datetime(*published[:6]))
 
     def __eq__(self, other):
         return self.parser == other.parser and \
@@ -263,15 +288,3 @@ class FeedEntry:
 
     def __ne__(self, other):
         return not (self == other)
-
-    def to_rss(self):
-        formatted_date = datetime.datetime(*self.published[:6]).strftime("%c")
-
-        xml = RSS_ENTRY_TEMPLATE.format(guid=self.id,
-                                        title=html.escape(self.title),
-                                        description=html.escape(self.description),
-                                        link=html.escape(self.link),
-                                        pubDate=formatted_date,
-                                        bytes=self.bytes,
-                                        mimetype=self.mimetype)
-        return xml

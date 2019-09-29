@@ -1,4 +1,5 @@
 import datetime
+import re
 import traceback
 
 import firebase_admin.auth
@@ -16,7 +17,6 @@ from apps.auth.utils import session_login, session_logout
 from apps.auth.utils import require_authenticated
 from apps.podcast import Podcast
 from apps.podcast.parser import get_parser_class, DownloadException
-from apps.podcast.utils import get_updated_feed, yaml_from_podcasts, podcasts_from_yaml
 from apps.tasks import require_cron_job, require_task_api_key
 from apps.tasks import add_task, get_task_arguments
 import settings
@@ -100,7 +100,7 @@ def podcasts_edit():
     if request.method == 'POST':
         content = request.form["yaml"]
         try:
-            updated_podcasts = podcasts_from_yaml(user.uid, content)
+            updated_podcasts = Podcast.podcasts_from_yaml(user.uid, content)
             existing_podcasts = Podcast.get_user_podcasts(user.uid)
             podcasts_to_add = []
             podcasts_to_delete = []
@@ -127,7 +127,7 @@ def podcasts_edit():
 
     # create yaml from the user podcasts
     podcasts = Podcast.get_user_podcasts(user.uid)
-    content = yaml_from_podcasts(podcasts)
+    content = Podcast.podcasts_to_yaml(podcasts)
     return render_template("podcasts_edit.html",
                            podcast_yaml=content,
                            yaml_error=yaml_error,
@@ -197,7 +197,7 @@ def task_recursive_download_podcast():
 
     podcast = Podcast.load(user_uid, podcast_id)
     feed = podcast.feed  # performance: prevents behind-the-scenes repeat pickling
-    new_feed = get_updated_feed(podcast)
+    new_feed = podcast.to_feed()
 
     new_entry = None
     for e in new_feed.entries:
@@ -218,12 +218,17 @@ def task_recursive_download_podcast():
         new_entry.link = blob.public_url
         new_entry.bytes = blob.size
         new_entry.mimetype = blob.content_type
-    except DownloadException:
+    except DownloadException as e:
         # no ability to download, so keep the original URL and move on.
-        pass
+        raise e
     # update feed and save (recall feed has pointers to the updated entry)
-    feed.add(new_entry)
-    podcast.feed = feed
+    # NOTE: We reload the podcast here before running `save` in case
+    # another task updated this podcast while we were downloading and
+    # writing the blob.
+    podcast = Podcast.load(user_uid, podcast_id)
+    if new_entry not in podcast.feed.entries:
+        feed.add(new_entry)
+        podcast.feed = feed
     podcast.last_updated = datetime.datetime.utcnow()
     podcast.save()
     # call this task again.  this ensures the system (serially) downloads
