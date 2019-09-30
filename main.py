@@ -5,6 +5,7 @@ import traceback
 import firebase_admin.auth
 from firebase_admin import firestore
 
+from flask import abort
 from flask import Flask
 from flask import render_template
 from flask import redirect
@@ -69,7 +70,10 @@ def podcast(user_uid, podcast_id):
     :param podcast_id: Podcast to render
     :return: RSS feed
     """
-    podcast = Podcast.load(user_uid, podcast_id)
+    try:
+        podcast = Podcast.load(user_uid, podcast_id)
+    except Exception:
+        abort(404)
     return Response(podcast.feed.to_rss(), mimetype="text/xml")
 
 
@@ -106,21 +110,21 @@ def podcasts_edit():
             podcasts_to_delete = []
 
             for old_podcast in existing_podcasts:
-                if not any([old_podcast.title == p.title and
-                            old_podcast.links == p.links for p in updated_podcasts]):
+                if not any([old_podcast.links == p.links for p in updated_podcasts]):
                     podcasts_to_delete.append(old_podcast)
 
             for new_podcast in updated_podcasts:
-                if not any([new_podcast.title == p.title and
-                            new_podcast.links == p.links for p in existing_podcasts]):
+                if not any([new_podcast.links == p.links for p in existing_podcasts]):
                     podcasts_to_add.append(new_podcast)
 
             # Podcasts to update their image or description
+            # I.e. the fields that are not included when checking for
+            # equality.
             for old_podcast in existing_podcasts:
                 try:
                     updated_podcast = [p for p in updated_podcasts
-                                         if old_podcast.title == p.title and
-                                            old_podcast.links == p.links][0]
+                                         if old_podcast.links == p.links][0]
+                    old_podcast.title = updated_podcast.title
                     old_podcast.description = updated_podcast.description
                     old_podcast.image = updated_podcast.image
                     old_podcast.save()

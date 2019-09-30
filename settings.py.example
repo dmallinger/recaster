@@ -12,6 +12,9 @@ PODCAST_PARSING_QUEUE_LOCATION = ""
 PODCAST_STORAGE_BUCKET = ""
 PODCAST_STORAGE_PREFIX = ""
 
+# For multiple URL podcasts, how many URLs are allowed?
+MAX_PODCAST_LINKS = 10
+
 # NOT from Google
 # Used to ensure that Task URLs aren't started by robots or others on the web.
 # A hack around the need for IAM and other more complex credentials in the
