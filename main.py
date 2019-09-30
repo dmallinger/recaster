@@ -107,16 +107,25 @@ def podcasts_edit():
 
             for old_podcast in existing_podcasts:
                 if not any([old_podcast.title == p.title and
-                            old_podcast.description == p.description and
                             old_podcast.links == p.links for p in updated_podcasts]):
                     podcasts_to_delete.append(old_podcast)
 
             for new_podcast in updated_podcasts:
                 if not any([new_podcast.title == p.title and
-                            new_podcast.description == p.description and
                             new_podcast.links == p.links for p in existing_podcasts]):
                     podcasts_to_add.append(new_podcast)
 
+            # Podcasts to update their image or description
+            for old_podcast in existing_podcasts:
+                try:
+                    updated_podcast = [p for p in updated_podcasts
+                                         if old_podcast.title == p.title and
+                                            old_podcast.links == p.links][0]
+                    old_podcast.description = updated_podcast.description
+                    old_podcast.image = updated_podcast.image
+                    old_podcast.save()
+                except IndexError:
+                    pass
             Podcast.batch_add_user_podcasts(user.uid, podcasts_to_add)
             Podcast.batch_remove_user_podcasts(user.uid, podcasts_to_delete)
 
