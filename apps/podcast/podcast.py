@@ -1,18 +1,18 @@
 import datetime
 import email.utils
-import pickle
 import urllib.request
-import yaml
 from flask import request, url_for, render_template
 from firebase_admin import firestore
 from uuid import uuid4
+from .type import PODCAST_TYPES
 
-from .parser import PARSERS
-
-import settings
 
 USER_PODCAST_COLLECTION = "users-podcasts"
 PODCAST_COLLECTION = "podcasts"
+
+
+class PodcastParserException(Exception):
+    pass
 
 
 class Podcast:
@@ -20,118 +20,103 @@ class Podcast:
     base object for all podcasts.  Additionally, provides class and static methods for working
     with and querying for podcasts.
     """
-    def __init__(self, user_uid, title, description, image, links, id=None, feed=None, last_updated=None):
+    def __init__(self, user_uid, podcast_type, url):
+        self.id = None
+        self.feed = None
         self.user_uid = user_uid
-        self.title = title
-        self.description = description
-        self.image = image
-        self.links = links
-        # optional params are only provided when loading from database
-        self.id = id if id is not None else str(uuid4())
-        self.feed = feed if feed is not None else Feed(user_uid=self.user_uid, podcast_id=self.id)
-        self.last_updated = last_updated if last_updated is not None else datetime.datetime.utcnow()
+        self.podcast_type = podcast_type
+        self.url = url
+        self.last_accessed = None
 
-    def __repr__(self):
-        return "\"{}\" Podcast".format(self.title)
+    def initialize(self):
+        parser = PODCAST_TYPES[self.podcast_type].parser()
+        try:
+            if self.id is None:
+                self.id = str(uuid4())
+            feed = parser.parse_url(self.url)
+            self.feed = Feed(user_uid=self.user_uid,
+                             podcast_id=self.id,
+                             title=feed["feed"]["title"],
+                             description=feed["feed"]["description"],
+                             image_url=feed["feed"]["image"]["href"],
+                             last_updated=datetime.datetime.utcnow())
+            self.last_accessed = datetime.datetime.utcnow()
+        except Exception:
+            raise PodcastParserException(f"""Could not parse podcast ({self.url}, {self.podcast_type})""")
 
     def __hash__(self):
-        links = tuple([(link.url, link.parser) for link in self.links])
-        elements = (self.id, self.user_uid, self.title, self.description, links)
-        return hash(elements)
+        return hash(self.id)
 
     def __eq__(self, other):
-        if not isinstance(other, Podcast):
-            raise TypeError("Cannot compare Podcast with non-Podcast type.")
-        return hash(self) == hash(other)
+        return self.id == other.id
 
     def __ne__(self, other):
         return not (self == other)
 
-    @property
-    def links(self):
-        return self._links
-
-    @links.setter
-    def links(self, links):
-        self._links = sorted(links)
-
-    @property
-    def feed(self):
-        return pickle.loads(self._feed)
-
-    @feed.setter
-    def feed(self, feed):
-        self._feed = pickle.dumps(feed)
+    def delete(self):
+        podcast_document = self.get_user_podcasts_collection(self.user_uid).document(self.id)
+        return podcast_document.delete()
 
     def save(self):
-        podcast_document = self._get_user_podcasts_collection(self.user_uid).document(self.id)
-        podcast_document.set(self.to_dict())
+        podcast_document = self.get_user_podcasts_collection(self.user_uid).document(self.id)
+        return podcast_document.set(self.to_dict())
 
     def to_dict(self):
-        pojo = {"user_uid": self.user_uid,
-                "title": self.title,
-                "description": self.description,
-                "image": self.image,
-                "links": [link.to_dict() for link in self.links],
-                "feed": self._feed,
-                "last_updated": self.last_updated.timestamp()}
+        pojo = {"id": self.id,
+                "user_uid": self.user_uid,
+                "podcast_type": self.podcast_type,
+                "url": self.url,
+                "feed": self.feed.to_dict(),
+                "last_accessed": self.last_accessed.timestamp()}
         return pojo
 
-    def to_feed(self):
+    def load_feed(self):
         all_entries = []
-        for link in self.links:
-            # get parser for this link
-            parser_class = PARSERS[link.parser]
-            parser = parser_class()
-            # parse the link feed
-            feed = parser.parse_url(link.url)
-            # for each entry, parse and append
-            for entry in feed["entries"]:
-                link_info = urllib.request.urlopen(entry["link"]).info()
-                bytes = link_info.get("Content-Length", 0)
-                mimetype = link_info.get("Content-Type", "")
-                feed_entry = FeedEntry(parser=parser.NAME,
-                                       id=entry["id"],
-                                       title=entry["title"],
-                                       description=entry["description"],
-                                       link=entry["link"],
-                                       published=entry["published_parsed"],
-                                       bytes=bytes,
-                                       mimetype=mimetype)
-                all_entries.append(feed_entry)
+        podcast_type = PODCAST_TYPES[self.podcast_type]
+        parser = podcast_type.parser()
+        # parse the link feed
+        feed = parser.parse_url(self.url)
+        # for each entry, parse and append
+        for entry in feed["entries"]:
+            link_info = urllib.request.urlopen(entry["link"]).info()
+            bytes_ = link_info.get("Content-Length", 0)
+            content_type = link_info.get("Content-Type", "")
+            feed_entry = FeedEntry(id=entry["id"],
+                                   title=entry["title"],
+                                   description=entry["description"],
+                                   link=entry["link"],
+                                   published=datetime.datetime(*(entry["published_parsed"][:6])),
+                                   bytes=bytes_,
+                                   mimetype=content_type)
+            all_entries.append(feed_entry)
         return Feed(user_uid=self.user_uid,
                     podcast_id=self.id,
+                    title=feed["feed"]["title"],
+                    description=feed["feed"]["description"],
+                    image_url=feed["feed"]["image"]["href"],
+                    last_updated=datetime.datetime.utcnow(),
                     entries=all_entries)
 
     @classmethod
     def load(cls, user_uid, podcast_id):
-        document = cls._get_user_podcasts_collection(user_uid).document(podcast_id).get()
+        document = cls.get_user_podcasts_collection(user_uid).document(podcast_id).get()
         if not document.exists:
-            raise Exception("Podcast not found: {}/{}".format(user_uid, podcast_id))
+            raise Exception(f"""Podcast not found: {user_uid}/{podcast_id}""")
         return cls.from_document(document)
 
     @classmethod
-    def from_document(cls, document):
-        data = document.to_dict()
-        links = []
-        for link_pojo in data["links"]:
-            link = Link(url=link_pojo["url"], parser=link_pojo["parser"])
-            links.append(link)
-        return Podcast(id=document.id,
-                       user_uid=data["user_uid"],
-                       title=data["title"],
-                       description=data["description"],
-                       image=data["image"],
-                       links=links,
-                       feed=pickle.loads(data["feed"]),
-                       last_updated=datetime.datetime.utcfromtimestamp(data["last_updated"]))
+    def from_dict(cls, dict_):
+        podcast = Podcast(user_uid=dict_["user_uid"],
+                          podcast_type=dict_["podcast_type"],
+                          url=dict_["url"])
+        podcast.id = dict_["id"]
+        podcast.feed = Feed.from_dict(dict_["feed"])
+        podcast.last_accessed = datetime.datetime.fromtimestamp(dict_["last_accessed"])
+        return podcast
 
     @classmethod
-    def _get_user_podcasts_collection(cls, user_uid):
-        db = firestore.client()
-        return db.collection(USER_PODCAST_COLLECTION) \
-                 .document(user_uid) \
-                 .collection(PODCAST_COLLECTION)
+    def from_document(cls, document):
+        return cls.from_dict(document.to_dict())
 
     @classmethod
     def get_user_collection(cls):
@@ -139,11 +124,17 @@ class Podcast:
         return db.collection(USER_PODCAST_COLLECTION)
 
     @classmethod
+    def get_user_podcasts_collection(cls, user_uid):
+        return cls.get_user_collection() \
+                  .document(user_uid) \
+                  .collection(PODCAST_COLLECTION)
+
+    @classmethod
     def get_user_podcasts(cls, user_uid):
         podcasts = []
-        collection = cls._get_user_podcasts_collection(user_uid).get()
+        collection = cls.get_user_podcasts_collection(user_uid).get()
         for document in collection:
-            podcasts.append(cls.from_document(document))
+            podcasts.append(cls.from_document(document.reference.get()))
         return podcasts
 
     @classmethod
@@ -151,7 +142,7 @@ class Podcast:
         db = firestore.client()
         batch = db.batch()
 
-        user_podcasts_reference = cls._get_user_podcasts_collection(user_uid)
+        user_podcasts_reference = cls.get_user_podcasts_collection(user_uid)
         for podcast in new_podcasts:
             user_podcasts_document = user_podcasts_reference.document(podcast.id)
             batch.set(user_podcasts_document, podcast.to_dict())
@@ -162,7 +153,7 @@ class Podcast:
     def batch_remove_user_podcasts(cls, user_uid, podcasts):
         db = firestore.client()
         batch = db.batch()
-        user_podcasts_documents = cls._get_user_podcasts_collection(user_uid).get()
+        user_podcasts_documents = cls.get_user_podcasts_collection(user_uid).get()
 
         # For every existing podcast, see if it has a match in the list of podcasts.
         for document in user_podcasts_documents:
@@ -171,120 +162,100 @@ class Podcast:
                 batch.delete(document.reference)
         batch.commit()
 
-    @classmethod
-    def podcasts_from_yaml(cls, user_uid, text):
-        podcasts = []
-        pojos = yaml.load(text, Loader=yaml.SafeLoader)
-        for podcast_config in pojos:
-            links = []
-            for link_pojo in podcast_config["links"]:
-                parser = link_pojo["parser"]
-                if parser not in PARSERS:
-                    raise ValueError("Invalid parser name")
-                link = Link(url=link_pojo["url"], parser=parser)
-                links.append(link)
-
-            if settings.MAX_PODCAST_LINKS < len(links):
-                raise Exception(
-                    "More than max of \"{}\" podcast links provided in YAML per podcast.".format(settings.MAX_PODCAST_LINKS))
-
-            podcast = Podcast(user_uid=user_uid,
-                              title=podcast_config["title"],
-                              description=podcast_config["description"] or "",  # optional
-                              image=podcast_config["image"],
-                              links=links)
-            podcasts.append(podcast)
-        return podcasts
-
-    @classmethod
-    def podcasts_to_yaml(cls, podcasts):
-        podcast_pojos = []
-        for podcast in podcasts:
-            links = [{"url": link.url, "parser": link.parser} for link in podcast.links]
-            pojo = {"title": podcast.title,
-                    "description": podcast.description,
-                    "image": podcast.image,
-                    "links": links}
-            podcast_pojos.append(pojo)
-
-        if 0 == len(podcast_pojos):  # since we start with an empty list
-            return ""
-        else:
-            return yaml.dump(podcast_pojos, sort_keys=False)
-
-
-class Link:
-    def __init__(self, url, parser):
-        self.url = url
-        self.parser = parser
-
-    def __hash__(self):
-        return hash((self.url, self.parser))
-
-    def __eq__(self, other):
-        if not isinstance(other, Link):
-            raise TypeError("Link cannot be compared with \"{}\" type.".format(type(other)))
-        return self.url == other.url and self.parser == other.parser
-
-    def __ne__(self, other):
-        return not (self == other)
-
-    def __lt__(self, other):
-        return (self.url, self.parser) < (other.url, other.parser)
-
-    def to_dict(self):
-        return {"url": self.url, "parser": self.parser}
-
-    @staticmethod
-    def from_dict(link):
-        return Link(url=link["url"], parser=link["parser"])
-
 
 class Feed:
-    def __init__(self, user_uid, podcast_id, entries=None):
-        self.user_uid = user_uid
-        self.podcast_id = podcast_id
+    def __init__(self, title, description,
+                 image_url, last_updated, entries=None,
+                 user_uid=None, podcast_id=None, link=None):
+
+        self.title = title
+        self.description = description
+        self.image_url = image_url
+        self.last_updated = last_updated
         self.entries = entries if entries is not None else []
         self._sort_entries()
+
+        if user_uid is None and podcast_id is None and link is not None:
+            self.link = link
+
+        elif user_uid is not None and podcast_id is not None and link is None:
+            self.link = "{}{}".format(request.url_root[0:-1],
+                                      url_for("podcast", user_uid=user_uid, podcast_id=podcast_id))
+        else:
+            raise Exception("Specify one (only one) of (user_uid, podcast_id) or (link)")
 
     def _sort_entries(self):
         self.entries = sorted(self.entries, key=lambda entry: entry.published, reverse=True)
 
-    def add(self, entry):
+    def insert(self, entry):
         self.entries.append(entry)
         self._sort_entries()
 
-    def to_rss(self):
-        # ensure updated info
-        podcast = Podcast.load(self.user_uid, self.podcast_id)
-        link = "{}{}".format(request.url_root[0:-1],
-                             url_for("podcast", user_uid=podcast.user_uid, podcast_id=podcast.id))
+    def remove(self, entry):
+        self.entries = [e for e in self.entries if entry != e]
 
+    def to_dict(self):
+        return {"link": self.link,
+                "title": self.title,
+                "description": self.description,
+                "image_url": self.image_url,
+                "last_updated": self.last_updated.timestamp(),
+                "entries": [entry.to_dict() for entry in self.entries]}
+
+    def to_rss(self):
         return render_template("podcast.rss",
-                               title=podcast.title,
-                               description=podcast.description,
-                               image=podcast.image,
-                               link=link,
-                               last_updated=email.utils.format_datetime(podcast.last_updated),
+                               title=self.title,
+                               description=self.description,
+                               image=self.image_url,
+                               link=self.link,
+                               last_updated=email.utils.format_datetime(self.last_updated),
                                entries=self.entries)
 
+    @classmethod
+    def from_dict(cls, feed_dict):
+        return Feed(link=feed_dict["link"],
+                    title=feed_dict["title"],
+                    description=feed_dict["description"],
+                    image_url=feed_dict["image_url"],
+                    last_updated=datetime.datetime.fromtimestamp(feed_dict["last_updated"]),
+                    entries=[FeedEntry.from_dict(e) for e in feed_dict["entries"]])
 
 
 class FeedEntry:
-    def __init__(self, parser, id, title, description, link, published, bytes, mimetype):
+    def __init__(self, id, title, description, link, published, bytes, mimetype):
         self.id = id
-        self.parser = parser
         self.title = title
         self.description = description
         self.link = link
         self.published = published
         self.bytes = bytes
         self.mimetype = mimetype
-        self.published_formatted = email.utils.format_datetime(datetime.datetime(*published[:6]))
 
     def __eq__(self, other):
-        return self.parser == other.parser and \
-               self.id == other.id
+        return self.id == other.id
 
     def __ne__(self, other):
         return not (self == other)
+
+    @property
+    def published_formatted(self):
+        return email.utils.format_datetime(self.published)
+
+    def to_dict(self):
+        return {"id": self.id,
+                "title": self.title,
+                "description": self.description,
+                "link": self.link,
+                "published": self.published.timestamp(),
+                "bytes": self.bytes,
+                "mimetype": self.mimetype}
+
+    @classmethod
+    def from_dict(cls, feed_entry_dict):
+        return FeedEntry(id=feed_entry_dict["id"],
+                         title=feed_entry_dict["title"],
+                         description=feed_entry_dict["description"],
+                         link=feed_entry_dict["link"],
+                         published=datetime.datetime.fromtimestamp(feed_entry_dict["published"]),
+                         bytes=feed_entry_dict["bytes"],
+                         mimetype=feed_entry_dict["mimetype"])

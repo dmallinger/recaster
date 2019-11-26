@@ -5,12 +5,12 @@
         {% for podcast in podcasts %}
             <li>
                 <a href="{{ url_for("podcast", user_uid=podcast.user_uid, podcast_id=podcast.id) }}">
-                    {{ podcast.title }}
+                    {{ podcast.feed.title }}
                 </a>
+                (<a href="{{ url_for("podcast_edit", user_uid=podcast.user_uid, podcast_id=podcast.id) }}">edit</a>)
                 <ul>
-                    {% for link in podcast.links %}
-                        <li>{{ link.url }} ({{ link.parser }})</li>
-                    {% endfor %}
+                    <li>{{ podcast.url }}</li>
+                    <li>{{ podcast_types[podcast.podcast_type].name }}</li>
                 </ul>
             </li>
         {% endfor %}

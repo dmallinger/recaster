@@ -10,10 +10,18 @@ PODCAST_PARSING_QUEUE_LOCATION = ""
 
 # Information about the Cloud Storage used for storing podcasts
 PODCAST_STORAGE_BUCKET = ""
-PODCAST_STORAGE_PREFIX = ""
+PODCAST_STORAGE_DIRECTORY = ""
 
-# For multiple URL podcasts, how many URLs are allowed?
-MAX_PODCAST_LINKS = 10
+# Chunk size when downloading from source and uploading into partitioned blobs on
+# Google.  In BYTES.  Used to limit the amount of disk space (and thus memory on Google)
+# used when running on the free tier of cloud services.
+STREAM_UPLOAD_CHUNK_SIZE = 5*1024*1024
+
+# If the podcast RSS feed is not visited in X DAYS, then delete it.
+PODCAST_EXPIRATION_DAYS = 30
+
+# If the episode is older than X DAYS, then delete it.
+EPISODE_EXPIRATION_DAYS = 90
 
 # NOT from Google
 # Used to ensure that Task URLs aren't started by robots or others on the web.

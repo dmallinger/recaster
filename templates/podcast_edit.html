@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    {% if parser_error %}
+        <div style="color: red">Could not parse URL with selected parser.</div>
+    {% endif %}
+    <form method="post" action="{{ url_for("podcast_edit", user_uid=user.uid, podcast_id=podcast.id if podcast else None) }}">
+        URL: <input type="text" name="url" value="{{ podcast.url if podcast else "" }}" />
+        <br/>
+        Type:
+        <select name="podcast_type">
+            {% for type in podcast_types %}
+                <option value="{{ type }}" {% if podcast.podcast_type == type %}selected="selected" {% endif %}>
+                    {{ podcast_types[type].name }}
+                </option>
+            {% endfor %}
+        </select>
+        <br/>
+        <input type="submit" value="Submit" />
+    </form>
+
+    {%  if podcast %}
+        <form method="post" action="{{ url_for("podcast_delete", user_uid=user.uid) }}">
+            <input type="hidden" name="podcast_id" value="{{ podcast.id }}" />
+            <input type="submit" value="Delete" />
+        </form>
+    {%  endif %}
+{% endblock %}

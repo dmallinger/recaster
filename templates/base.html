@@ -42,7 +42,7 @@
         {% if user %}
             <a href="{{ url_for('home') }}">Home</a> <strong>||</strong>
             <a href="{{ url_for('podcasts_list') }}">View Podcasts</a> <strong>||</strong>
-            <a href="{{ url_for('podcasts_edit') }}">Edit Podcasts</a> <strong>||</strong>
+            <a href="{{ url_for('podcast_edit', user_uid=user.uid) }}">Add Podcast</a> <strong>||</strong>
             Not {{ user.display_name }}? <a href="{{ url_for('logout') }}">Logout</a>
         {% else %}
             <a href="{{ url_for('login') }}">Login</a>

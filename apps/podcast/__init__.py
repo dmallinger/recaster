@@ -1,4 +1,4 @@
-from .podcast import Podcast
+from .podcast import Podcast, PodcastParserException
 
 
 
