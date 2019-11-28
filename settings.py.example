@@ -1,5 +1,8 @@
 # Google app engine project name
 PROJECT = ""
+FIREBASE_PROJECT_NAME = ""
+FIREBASE_API_KEY = ""
+AUTH_DOMAIN = ""
 
 # for Flask- required for sessions
 SECRET_KEY = ""
@@ -10,7 +13,7 @@ PODCAST_PARSING_QUEUE_LOCATION = ""
 
 # Information about the Cloud Storage used for storing podcasts
 PODCAST_STORAGE_BUCKET = ""
-PODCAST_STORAGE_DIRECTORY = ""
+PODCAST_STORAGE_DIRECTORY = "content"
 
 # Chunk size when downloading from source and uploading into partitioned blobs on
 # Google.  In BYTES.  Used to limit the amount of disk space (and thus memory on Google)

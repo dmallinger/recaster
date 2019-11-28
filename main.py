@@ -158,7 +158,7 @@ def podcast_delete(user_uid):
 
 
 @app.route('/internal/start-parsing/', methods=["GET", "POST"])
-#@require_cron_job
+@require_cron_job
 def task_start_parsing():
     """Cron job starts parsing.  Calls tasks as these can (depending on
     configuration) run for longer than ordinary crons and web calls.
@@ -289,7 +289,7 @@ def inject_dict_for_all_templates():
 
     :return: A dictionary of variables
     """
-    global_vars = {}
+    global_vars = {"settings": settings}
 
     if is_authenticated():
         global_vars["user"] = get_authenticated_user()

@@ -15,10 +15,10 @@
     <script>
     // TODO: Replace the following with your app's Firebase project configuration
     var firebaseConfig = {
-      apiKey: "AIzaSyBcXYzXElEFA0EyR-JnXooYa-cTQ6xoyQk",
-      authDomain: "recaster.firebaseapp.com",
-      projectId: "recaster",
-      appID: "recaster",
+      apiKey: "{{ settings.FIREBASE_API_KEY }}",
+      authDomain: "{{ settings.AUTH_DOMAIN }}",
+      projectId: "{{ settings.PROJECT }}",
+      appID: "{{ settings.FIREBASE_PROJECT }}",
     };
 
     // Initialize Firebase
