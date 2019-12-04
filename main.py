@@ -166,6 +166,7 @@ def task_start_parsing():
     :return: Ok
     """
     add_task(url_for("task_queue_users"))
+    add_task(url_for("task_clean_tmp_files"))
     return OK_RESPONSE
 
 
@@ -183,6 +184,19 @@ def task_queue_users():
             continue
         # add user task
         add_task(url_for("task_queue_podcasts"), {"user_uid": user.uid})
+
+    return OK_RESPONSE
+
+
+@app.route('/internal/clean-temporary-files', methods=["GET", "POST"])
+@require_task_api_key
+def task_clean_tmp_files():
+    client = google.cloud.storage.Client()
+    blobs = client.list_blobs(settings.PODCAST_STORAGE_BUCKET,
+                              prefix=settings.PODCAST_TMP_STORAGE_DIRECTORY)
+    for blob in blobs:
+        if blob.time_created.replace(tzinfo=None) + datetime.timedelta(1) <= datetime.datetime.now():
+            blob.delete()
 
     return OK_RESPONSE
 

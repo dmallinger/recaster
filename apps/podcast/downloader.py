@@ -22,7 +22,7 @@ class Downloader:
 
     @classmethod
     def stream_download(cls, source_url, destination_path):
-        return stream_upload(source_url, destination_path)
+        return stream_upload(source_url, destination_path, tmp_path=settings.PODCAST_TMP_STORAGE_DIRECTORY)
 
     @classmethod
     def download(cls, url):

@@ -2,8 +2,8 @@ Flask==1.0.2
 firebase_admin
 PyYAML
 feedparser
-google-cloud-tasks==1.1.0
-googleapis-common-protos==1.6.0
+google-cloud-tasks
+googleapis-common-protos
 ffmpeg-python
 youtube-dl
 gcs-oauth2-boto-plugin
