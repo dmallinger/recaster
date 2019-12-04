@@ -191,6 +191,10 @@ def task_queue_users():
 @app.route('/internal/clean-temporary-files', methods=["GET", "POST"])
 @require_task_api_key
 def task_clean_tmp_files():
+    """Parallel to parsing, we delete all the old files that were part of PartitionedBlob
+
+    TODO: move the pieces into the staging.* bucket and set a rule for cleanup instead
+    """
     client = google.cloud.storage.Client()
     blobs = client.list_blobs(settings.PODCAST_STORAGE_BUCKET,
                               prefix=settings.PODCAST_TMP_STORAGE_DIRECTORY)
